@@ -29,6 +29,8 @@ class MenuItem(
 class Overlays(private val root: FrameLayout, private val palette: () -> Palette) {
     private var current: View? = null
     private var onClosed: (() -> Unit)? = null
+    /** What had the keypad highlight before the overlay opened; it gets it back on closing. */
+    private var focusBefore: View? = null
     var insets = Rect()
 
     /** Keyboard height; an open sheet rises above the keyboard. */
@@ -64,6 +66,10 @@ class Overlays(private val root: FrameLayout, private val palette: () -> Palette
         root.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
             .hideSoftInputFromWindow(root.windowToken, 0)
         setUnderlyingFocusable(true)
+        // With the keypad, the highlight goes back where it was, instead of vanishing or landing
+        // on whatever Android finds first. (An option that moves it, like Move, does so after this.)
+        focusBefore?.takeIf { it.isAttachedToWindow && it.isShown && !it.isInTouchMode }?.requestFocus()
+        focusBefore = null
         val card = overlay.findViewWithTag<View>(CARD)
         overlay.animate().alpha(0f).setDuration(120).withEndAction { root.removeView(overlay) }.start()
         if (card.tag == CARD && card.getTag(R.id.sheet) == true) {
@@ -361,6 +367,8 @@ class Overlays(private val root: FrameLayout, private val palette: () -> Palette
     }
 
     private fun show(card: View, scrimAlpha: Int = 0, scrimColor: Int = scrimAlpha shl 24) {
+        // One overlay replacing another keeps what had the highlight before the first.
+        if (current == null) focusBefore = root.findFocus()
         if (current != null) {
             root.removeView(current)
             current = null
