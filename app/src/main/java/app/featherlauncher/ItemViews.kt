@@ -99,6 +99,9 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
     private var sizeFactor = 1f
     /** The time's size, before it's made smaller to fit. */
     private var timePx = 200f
+    /** The date's and the quieter line's sizes, before they're made larger with the time hidden. */
+    private var datePx = 60f
+    private var detailPx = 50f
 
     /** Tapping something coming up: the day's zmanim, the event, the alarms. */
     var onTap: ((Glance.Item, ClockInfo.Place?) -> Unit)? = null
@@ -139,23 +142,62 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
         addView(pills, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
     }
 
-    /** The space last measured for and the time's scale that fitted it, so the next pass changes nothing. */
-    private var fitted: Triple<Int, Int, Float>? = null
+    /** The space last measured for and the scales that fitted it, so the next pass changes nothing. */
+    private class Fit(val width: Int, val height: Int, val time: Float, val lines: Float)
+    private var fitted: Fit? = null
 
     /** In a tight space, a smaller time comes first; only then are lines left out. */
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         sizeFor(MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight)
-        fitted?.takeIf { it.first == widthMeasureSpec && it.second == heightMeasureSpec }?.let {
-            time.setTextSize(TypedValue.COMPLEX_UNIT_PX, timePx * it.third)
+        fitted?.takeIf { it.width == widthMeasureSpec && it.height == heightMeasureSpec }?.let {
+            scale(it.time, it.lines)
             return super.onMeasure(widthMeasureSpec, heightMeasureSpec)
         }
+        if (time.visibility == GONE) return fitLines(widthMeasureSpec, heightMeasureSpec)
         for (scale in listOf(1f, 0.85f, 0.72f)) {
-            time.setTextSize(TypedValue.COMPLEX_UNIT_PX, timePx * scale)
+            scale(scale, 1f)
             super.onMeasure(widthMeasureSpec, heightMeasureSpec)
-            fitted = Triple(widthMeasureSpec, heightMeasureSpec, scale)
-            val cut = (0 until childCount).map(::getChildAt).any { it.getTag(R.id.fit_hidden) == true && it.visibility == GONE }
-            if (!cut) return
+            fitted = Fit(widthMeasureSpec, heightMeasureSpec, scale, 1f)
+            if (cut().isEmpty()) return
         }
+    }
+
+    /**
+     * Without the time, the date and the quieter line grow to about the width of the pills under
+     * them, as far as the height allows without leaving out anything more.
+     */
+    private fun fitLines(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        scale(1f, 1f)
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        fitted = Fit(widthMeasureSpec, heightMeasureSpec, 1f, 1f)
+        val shown = if (pills.visibility != VISIBLE) emptyList()
+            else (0 until pills.childCount).map(pills::getChildAt).filter { it.visibility == VISIBLE }
+        val widest = listOf(date, detail).filter { it.visibility == VISIBLE }.maxOfOrNull { it.paint.measureText(it.text.toString()) }
+        if (shown.isEmpty() || widest == null || widest <= 0f) return
+        // From the first pill's icon to the end of the last one's words, leaving out the room they have for a touch.
+        val pillsWidth = shown.sumOf { it.measuredWidth } + pills.gap * (shown.size - 1) - shown.first().paddingStart - shown.last().paddingEnd
+        val before = cut()
+        var grow = (pillsWidth / widest).coerceAtMost(MAX_GROW)
+        while (grow > 1.05f) {
+            scale(1f, grow)
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            if (before.containsAll(cut())) {
+                fitted = Fit(widthMeasureSpec, heightMeasureSpec, 1f, grow)
+                return
+            }
+            grow *= 0.9f
+        }
+        scale(1f, 1f)
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
+
+    /** The rows left out for want of room. */
+    private fun cut() = (0 until childCount).map(::getChildAt).filter { it.getTag(R.id.fit_hidden) == true && it.visibility == GONE }
+
+    private fun scale(time: Float, lines: Float) {
+        this.time.setTextSize(TypedValue.COMPLEX_UNIT_PX, timePx * time)
+        date.setTextSize(TypedValue.COMPLEX_UNIT_PX, datePx * lines)
+        detail.setTextSize(TypedValue.COMPLEX_UNIT_PX, detailPx * lines)
     }
 
     override fun onAttachedToWindow() {
@@ -229,8 +271,8 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
         fitted = null
         val unit = width / 100f * sizeFactor
         timePx = 23f * unit
-        date.setTextSize(TypedValue.COMPLEX_UNIT_PX, 5.6f * unit)
-        detail.setTextSize(TypedValue.COMPLEX_UNIT_PX, 4.6f * unit)
+        datePx = 5.6f * unit
+        detailPx = 4.6f * unit
         pillPx = 4.2f * unit
         for (i in 0 until pills.childCount) (pills.getChildAt(i) as? TextView)?.let { WidgetStyle.sizePill(it, pillPx) }
     }
@@ -240,6 +282,8 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
 
 /** Padding around the clock's time so its shadow isn't clipped. */
 private const val SHADOW_ROOM = 12
+/** How much larger the date can get with the time hidden, so a short date next to long pills doesn't loom. */
+private const val MAX_GROW = 1.8f
 
 data class ClockOptions(val size: Size, val alignStart: Boolean, val showDate: Boolean, val showTime: Boolean = true) {
     enum class Size(val label: String) { SMALL("Small"), MEDIUM("Medium"), LARGE("Large") }
