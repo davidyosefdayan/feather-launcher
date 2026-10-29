@@ -139,17 +139,18 @@ class OnboardingActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        fun refresh() {
-            choices.removeAllViews()
-            listOf(true to "Categories", false to "All apps").forEach { (cats, label) ->
-                choices.addView(choiceCard(label, if (cats) "Grouped, with tabs" else "One list, A to Z",
-                    selected = prefs.drawerCategories == cats, categories = cats) {
-                    prefs.drawerCategories = cats
-                    refresh()
-                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                    setMargins(dp(Ui.SPACE_S), 0, dp(Ui.SPACE_S), 0)
-                })
+        val cards = HashMap<Boolean, LinearLayout>()
+        // Marked in place, not rebuilt, so the keypad highlight stays on the card just picked.
+        fun refresh() = cards.forEach { (cats, card) -> markChoice(card, prefs.drawerCategories == cats) }
+        listOf(true to "Categories", false to "All apps").forEach { (cats, label) ->
+            val card = choiceCard(label, if (cats) "Grouped, with tabs" else "One list, A to Z", categories = cats) {
+                prefs.drawerCategories = cats
+                refresh()
             }
+            cards[cats] = card
+            choices.addView(card, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(dp(Ui.SPACE_S), 0, dp(Ui.SPACE_S), 0)
+            })
         }
         refresh()
         return page(
@@ -300,23 +301,25 @@ class OnboardingActivity : Activity() {
         layoutParams = LinearLayout.LayoutParams(dp(96), dp(96))
     }.let { tile -> FrameLayout(this).apply { addView(tile, FrameLayout.LayoutParams(dp(96), dp(96))) } }
 
-    /** A tappable choice with a small picture of what it means: tabs at the bottom, or one long list. */
-    private fun choiceCard(label: String, detail: String, selected: Boolean, categories: Boolean, onPick: () -> Unit) =
+    /**
+     * A tappable choice with a small picture of what it means: tabs at the bottom, or one long
+     * list. Which one is chosen shows as in the rest of the app (see [markChoice]); the only
+     * outline is the keypad highlight, as everywhere else.
+     */
+    private fun choiceCard(label: String, detail: String, categories: Boolean, onPick: () -> Unit) =
         LinearLayout(this).apply {
             val p = palette
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(Ui.SPACE_L), dp(Ui.SPACE_L), dp(Ui.SPACE_L), dp(Ui.SPACE_L))
-            background = Ui.rounded(context, if (selected) p.accentSurface else p.surfaceHigh, Components.GROUP_RADIUS,
-                if (selected) p.accent else 0)
             foreground = Ui.pressable(context, Components.GROUP_RADIUS)
             isFocusable = true
-            tag = if (selected) PRIMARY_CHOICE else null
             addView(miniList(categories), LinearLayout.LayoutParams(dp(84), dp(120)))
             addView(TextView(context).apply {
                 text = label
                 style(TextStyle.Label, p.text)
                 gravity = Gravity.CENTER
+                compoundDrawablePadding = dp(Ui.SPACE_XS)
                 setPadding(0, dp(Ui.SPACE_M), 0, 0)
             })
             addView(TextView(context).apply {
@@ -327,6 +330,21 @@ class OnboardingActivity : Activity() {
             })
             setOnClickListener { onPick() }
         }
+
+    /** The chosen card takes the accent's soft tone, with a check by its name, like a chosen tile in Settings. */
+    private fun markChoice(card: LinearLayout, selected: Boolean) {
+        val p = palette
+        card.background = Ui.rounded(this, if (selected) p.accentSurface else p.surfaceHigh, Components.GROUP_RADIUS)
+        card.isSelected = selected
+        (card.getChildAt(1) as TextView).apply {
+            setTextColor(if (selected) p.accent else p.text)
+            val check = if (selected) getDrawable(R.drawable.ic_check)!!.mutate().apply {
+                setTint(p.accent)
+                setBounds(0, 0, dp(18), dp(18))
+            } else null
+            setCompoundDrawablesRelative(check, null, null, null)
+        }
+    }
 
     /** A tiny phone screen: rows of dots for apps, and a tab bar for the categories layout. */
     private fun miniList(categories: Boolean): View = LinearLayout(this).apply {
@@ -389,7 +407,6 @@ class OnboardingActivity : Activity() {
 
     companion object {
         private const val PRIMARY = "primary"
-        private const val PRIMARY_CHOICE = "choice"
 
         /** Opens the welcome the first time the launcher runs. */
         fun showIfNeeded(context: Context): Boolean {
