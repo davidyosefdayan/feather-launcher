@@ -245,6 +245,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         if (::smartSearch.isInitialized) preloadSearch()
         // Settings may have changed on the settings page.
         prefs.reload()
+        PhoneTheme.sync(this, prefs)
         WeatherWallpaper.refresh(this)
         Shuffle.next(this)
         val next = currentPalette()
@@ -258,6 +259,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         homeScreen.bindAll()
         updateResults()
         watchLimits()
+        watchSun()
         NotificationBadges.onChange = badgesChanged
         Updates.get(this).checkIfDue()
         offerSetup()
@@ -293,6 +295,22 @@ class HomeActivity : Activity(), HomeScreen.Host {
         limits.nextChange(now)?.let { home.postDelayed(limitsChanged, it - now + 500) }
     }
 
+    private val sunChanged = Runnable {
+        PhoneTheme.sync(this, prefs)
+        palette = currentPalette()
+        applyTheme()
+        applyDarkMode()
+        watchSun()
+    }
+
+    /** With the theme following the sun, recolors at sunrise and sunset while the home screen shows. */
+    private fun watchSun() {
+        home.removeCallbacks(sunChanged)
+        if (prefs.themeMode != ThemeMode.SUN) return
+        val now = System.currentTimeMillis()
+        home.postDelayed(sunChanged, DarkMode.nextSunChange(this, now) - now + 500)
+    }
+
     override fun onPause() {
         super.onPause()
         if (running === this) running = null
@@ -306,6 +324,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
             findViewById<View>(R.id.wall_dim).alpha = 0f
         }
         home.removeCallbacks(limitsChanged)
+        home.removeCallbacks(sunChanged)
         home.removeCallbacks(redrawBadges)
         if (NotificationBadges.onChange === badgesChanged) NotificationBadges.onChange = null
         widgets.stopListening()

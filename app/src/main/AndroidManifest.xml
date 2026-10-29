@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <!-- Only for browsing wallpapers. -->
@@ -17,6 +18,10 @@
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <!-- Only if granted from a computer (adb), to switch the whole phone's dark mode with the theme. -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
 
     <application
         android:networkSecurityConfig="@xml/network_security_config"
@@ -46,6 +51,7 @@
 
         <activity
             android:name=".SettingsActivity"
+            android:configChanges="uiMode"
             android:exported="false"
             android:label="Settings"
             android:taskAffinity=""
@@ -117,6 +123,11 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- Sunrise and sunset, when the theme follows the sun. -->
+        <receiver
+            android:name=".PhoneTheme$Receiver"
+            android:exported="false" />
 
         <!-- Lets the launcher be opened like a normal app while it's being tried out. -->
         <activity-alias

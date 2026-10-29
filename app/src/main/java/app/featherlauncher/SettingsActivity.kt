@@ -135,6 +135,12 @@ class SettingsActivity : Activity() {
         if (intent.getBooleanExtra(EXTRA_UPDATE, false)) root.post { updatesSheet() }
     }
 
+    /** The phone went light or dark (perhaps switched from here): redrawn in place, staying on this page. */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (::content.isInitialized) build()
+    }
+
     override fun onStop() {
         super.onStop()
         // Unlocking changes to app limits lasts until Settings is left.
@@ -342,12 +348,25 @@ class SettingsActivity : Activity() {
     private fun appearance(p: Palette) {
         content.addView(spacer())
         val shape = prefs.iconShape
-        content.addView(Components.group(this, p, listOf(
+        val followsPhone = prefs.themeMode == ThemeMode.SYSTEM
+        content.addView(Components.group(this, p, listOfNotNull(
             Components.row(this, p, R.drawable.ic_theme, "Theme", prefs.themeMode.label, chevron = true, inset = Ui.SPACE_L) {
                 Components.choiceSheet(this, p, overlays, "Theme", ThemeMode.entries.map { it.label to null }, prefs.themeMode.ordinal) {
                     prefs.themeMode = ThemeMode.entries[it]
+                    PhoneTheme.sync(this, prefs, force = true)
                     build()
                 }
+            },
+            if (followsPhone) null else Components.toggleRow(this, p, R.drawable.ic_moon, "Use for the whole phone",
+                prefs.themeWholePhone && PhoneTheme.allowed(this)) {
+                if (it && !PhoneTheme.allowed(this)) {
+                    // Can't be on yet: show how to allow it, and the switch goes back off.
+                    build()
+                    wholePhoneSheet()
+                    return@toggleRow
+                }
+                prefs.themeWholePhone = it
+                PhoneTheme.sync(this, prefs, force = true)
             },
             Components.row(this, p, R.drawable.ic_wallpaper, "Wallpaper", chevron = true, inset = Ui.SPACE_L) {
                 startActivity(Intent(this, WallpaperActivity::class.java))
@@ -356,6 +375,8 @@ class SettingsActivity : Activity() {
                 if (prefs.accentColor == 0) "From wallpaper" else "Custom", chevron = true, inset = Ui.SPACE_L,
                 trailing = Components.dot(this, p.accent)) { accentSheet() },
         )))
+        if (prefs.themeMode == ThemeMode.SUN) content.addView(Components.footnote(this, p,
+            "Light from sunrise to sunset where you are, or in the city chosen under Calendar and times. Without a location, 7 am to 7 pm."))
         content.addView(heading(p, "Icons"))
         content.addView(spacer())
         content.addView(Components.group(this, p, listOf(
@@ -398,6 +419,44 @@ class SettingsActivity : Activity() {
         )))
         content.addView(Components.footnote(this, p,
             "Choose how app icons look and whether to dim the wallpaper. To switch wallpapers with dark mode, choose a light and dark pair under Wallpaper."))
+    }
+
+    /**
+     * Android keeps switching dark mode for its own apps; Feather can do it once it's been
+     * allowed from a computer, one time.
+     */
+    private fun wholePhoneSheet() {
+        val p = palette
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(Ui.SPACE_XL), 0, dp(Ui.SPACE_XL), dp(Ui.SPACE_L))
+            addView(TextView(this@SettingsActivity).apply {
+                text = "Android only lets Feather switch the whole phone to light or dark once it's allowed to from a computer. " +
+                    "Connect the phone with USB debugging on and run this once:"
+                style(TextStyle.Body, p.textSecondary)
+            })
+            addView(TextView(this@SettingsActivity).apply {
+                text = PhoneTheme.GRANT
+                style(TextStyle.Secondary, p.text)
+                typeface = android.graphics.Typeface.MONOSPACE
+                setTextIsSelectable(true)
+                background = Ui.rounded(this@SettingsActivity, p.surfaceHigh, Ui.RADIUS_M)
+                setPadding(dp(Ui.SPACE_M), dp(Ui.SPACE_M), dp(Ui.SPACE_M), dp(Ui.SPACE_M))
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(Ui.SPACE_M)
+            })
+            addView(TextView(this@SettingsActivity).apply {
+                text = "Then turn this on again. It stays allowed through updates."
+                style(TextStyle.Secondary, p.textSecondary)
+                setPadding(0, dp(Ui.SPACE_M), 0, 0)
+            })
+            addView(Components.pillButton(this@SettingsActivity, "Copy command", p.accent, p.onAccent) {
+                getSystemService(android.content.ClipboardManager::class.java)
+                    .setPrimaryClip(android.content.ClipData.newPlainText("Command", PhoneTheme.GRANT))
+                overlays.dismiss()
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(Ui.SPACE_L) })
+        }
+        overlays.showSheet("Use for the whole phone", column)
     }
 
     private fun lookName(look: IconLookSetting) = when (look) {

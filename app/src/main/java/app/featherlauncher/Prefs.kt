@@ -24,6 +24,11 @@ class Prefs(context: Context) {
         get() = runCatching { ThemeMode.valueOf(sp.getString("theme_mode", null)!!) }.getOrDefault(ThemeMode.SYSTEM)
         set(value) = sp.edit().putString("theme_mode", value.name).apply()
 
+    /** Switch the whole phone between light and dark along with the theme (see [PhoneTheme]). */
+    var themeWholePhone: Boolean
+        get() = sp.getBoolean("theme_whole_phone", false)
+        set(value) = sp.edit().putBoolean("theme_whole_phone", value).apply()
+
     var iconShape: IconShape
         get() = runCatching { IconShape.valueOf(sp.getString("icon_shape", null)!!) }.getOrDefault(IconShape.SQUIRCLE)
         set(value) = sp.edit().putString("icon_shape", value.name).apply()

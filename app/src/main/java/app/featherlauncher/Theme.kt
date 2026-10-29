@@ -16,7 +16,8 @@ enum class ColorStyle(val label: String, val hue: Float, val saturation: Float) 
     ROSE("Rose", 340f, 0.45f),
 }
 
-enum class ThemeMode(val label: String) { SYSTEM("Match phone"), LIGHT("Light"), DARK("Dark") }
+/** [SUN] is light from sunrise to sunset where the phone is, and dark the rest of the time. */
+enum class ThemeMode(val label: String) { SYSTEM("Match phone"), SUN("Sunrise to sunset"), LIGHT("Light"), DARK("Dark") }
 
 /**
  * Every color the UI uses, from one hue (the wallpaper's, or a preset). Surfaces
@@ -106,12 +107,7 @@ class Palette(
         }
 
         fun from(context: Context, style: ColorStyle, mode: ThemeMode, accentColor: Int = 0): Palette {
-            val dark = when (mode) {
-                ThemeMode.LIGHT -> false
-                ThemeMode.DARK -> true
-                ThemeMode.SYSTEM -> context.resources.configuration.uiMode and
-                    android.content.res.Configuration.UI_MODE_NIGHT_MASK == android.content.res.Configuration.UI_MODE_NIGHT_YES
-            }
+            val dark = DarkMode.isDark(context, mode)
             val colors = WallpaperManager.getInstance(context).getWallpaperColors(WallpaperManager.FLAG_SYSTEM)
             val seed = colors?.let(::averageColor)?.let(::rgbToHsl)
                 ?: floatArrayOf(ColorStyle.OCEAN.hue, ColorStyle.OCEAN.saturation, 0.3f)
