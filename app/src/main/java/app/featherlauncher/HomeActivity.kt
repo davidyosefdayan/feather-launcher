@@ -221,7 +221,8 @@ class HomeActivity : Activity(), HomeScreen.Host {
     /**
      * An invisible place for the keypad highlight to rest. Pressing a key (even Home) takes the
      * phone out of touch mode, and Android then highlights the first thing it finds, the widget.
-     * Coming home, the highlight rests here instead, and only appears once an arrow is pressed.
+     * After a touch, or once the app list closes, the highlight rests here instead, and only
+     * appears once an arrow is pressed. Coming home, it starts on the first app (see [focusFirstApp]).
      */
     private val focusPark by lazy {
         View(this).apply {
@@ -238,10 +239,32 @@ class HomeActivity : Activity(), HomeScreen.Host {
         focusPark.requestFocus()
     }
 
+    /**
+     * Coming home with the keypad: the highlight is already on the top left app, so OK opens it
+     * and the arrows move from it, without a key press to show it first.
+     */
+    private fun focusFirstApp() {
+        if (drawerOpen || overlays.isShowing) return
+        // Until the window has focus again it can still be in touch mode from before, which
+        // refuses the highlight; then it's tried again once it has (onWindowFocusChanged).
+        startOnFirstApp = !homeScreen.focusFirstApp()
+        if (startOnFirstApp) focusPark.requestFocus()
+    }
+
+    /** Coming home, the highlight couldn't go on the first app yet (see [focusFirstApp]). */
+    private var startOnFirstApp = false
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus || !startOnFirstApp) return
+        startOnFirstApp = false
+        // Only if nothing else took the highlight meanwhile.
+        if (!drawerOpen && !overlays.isShowing && (currentFocus == null || currentFocus === focusPark)) homeScreen.focusFirstApp()
+    }
+
     override fun onResume() {
         super.onResume()
         running = this
-        parkFocus()
         if (::smartSearch.isInitialized) preloadSearch()
         // Settings may have changed on the settings page.
         prefs.reload()
@@ -256,6 +279,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         repo.setShape(prefs.iconShape)
         applyDarkMode()
         homeScreen.bindAll()
+        focusFirstApp()
         updateResults()
         watchLimits()
         NotificationBadges.onChange = badgesChanged
@@ -320,7 +344,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         if (openFromKey(intent.getStringExtra(EXTRA_OPEN))) return
         if (!drawerOpen) homeScreen.pages.snapTo(0)
         hideDrawer()
-        parkFocus()
+        focusFirstApp()
     }
 
     @Deprecated("Platform Activity API")

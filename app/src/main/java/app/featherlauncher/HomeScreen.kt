@@ -1796,6 +1796,19 @@ class HomeScreen(
         return true
     }
 
+    /**
+     * Puts the keypad highlight on the top left app (or folder) of the page showing, or the
+     * dock's first when the page has none, so it's there as soon as the home screen opens.
+     * Returns false when there's no app, or the screen is in touch mode (where nothing shows a
+     * highlight until a key is pressed).
+     */
+    fun focusFirstApp(): Boolean {
+        val apps = workspace.items.filter { !it.isWidget && it.page == pages.currentPage }.sortedWith(compareBy({ it.y }, { it.x })) +
+            workspace.items.filter { !it.isWidget && it.inDock }.sortedBy { it.x }
+        val first = apps.firstNotNullOfOrNull { item -> views[item.id]?.takeIf { it.isFocusable && it.visibility == View.VISIBLE } }
+        return first?.requestFocus() == true
+    }
+
     /** Flips to the next or previous page, if there is one (holding right or left on the keypad). */
     fun flipPage(delta: Int) {
         val next = pages.currentPage + delta
