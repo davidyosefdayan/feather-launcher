@@ -1797,15 +1797,15 @@ class HomeScreen(
     }
 
     /**
-     * Puts the keypad highlight on the top left app (or folder) of the page showing, or the
-     * dock's first when the page has none, so it's there as soon as the home screen opens.
-     * Returns false when there's no app, or the screen is in touch mode (where nothing shows a
-     * highlight until a key is pressed).
+     * Puts the keypad highlight on the leftmost item in the dock (the page's top left item when
+     * the dock is empty), so it's there as soon as the home screen opens, always in the same
+     * place. Returns false when there's nothing, or the screen is in touch mode (where nothing
+     * shows a highlight until a key is pressed).
      */
-    fun focusFirstApp(): Boolean {
-        val apps = workspace.items.filter { !it.isWidget && it.page == pages.currentPage }.sortedWith(compareBy({ it.y }, { it.x })) +
-            workspace.items.filter { !it.isWidget && it.inDock }.sortedBy { it.x }
-        val first = apps.firstNotNullOfOrNull { item -> views[item.id]?.takeIf { it.isFocusable && it.visibility == View.VISIBLE } }
+    fun focusDockStart(): Boolean {
+        val order = workspace.items.filter { it.inDock }.sortedBy { it.x } +
+            workspace.items.filter { it.page == pages.currentPage }.sortedWith(compareBy({ it.y }, { it.x }))
+        val first = order.firstNotNullOfOrNull { item -> views[item.id]?.takeIf { it.isFocusable && it.visibility == View.VISIBLE } }
         return first?.requestFocus() == true
     }
 
