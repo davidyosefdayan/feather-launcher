@@ -170,8 +170,7 @@ class HomeScreen(
                 target.place(view, item.x, item.y, item.w, item.h)
             }
         }
-        val offset = if (prefs.showLabels) dp(AppIconView.LABEL_HEIGHT) / 2f else 0f
-        for (i in 0 until pages.pageCount) pages.page(i).iconOffset = offset
+        for (i in 0 until pages.pageCount) pages.page(i).labels = prefs.showLabels
         pages.updateFocusability()
     }
 
