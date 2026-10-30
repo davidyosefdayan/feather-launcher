@@ -349,7 +349,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     @Deprecated("Platform Activity API")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (!widgets.onActivityResult(requestCode, resultCode, data)) super.onActivityResult(requestCode, resultCode, data)
+        if (!widgets.onActivityResult(requestCode, resultCode)) super.onActivityResult(requestCode, resultCode, data)
     }
 
     private val newApps by lazy { NewApps.get(this) }

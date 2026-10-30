@@ -51,16 +51,7 @@ class Widgets(
     }
     private val previews = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
-
-    /**
-     * The widget being added, while Android asks to allow it or its app sets it up. Kept on disk:
-     * a big setup screen (Weawow's, say) can get the launcher closed to free memory, and the
-     * result then comes back to a new launcher that would otherwise not know which widget it was.
-     */
-    private val saved = activity.getSharedPreferences("widgets", Context.MODE_PRIVATE)
-    private var pendingId: Int
-        get() = saved.getInt("pending_id", AppWidgetManager.INVALID_APPWIDGET_ID)
-        set(value) = saved.edit().putInt("pending_id", value).apply()
+    private var pendingId = AppWidgetManager.INVALID_APPWIDGET_ID
 
     fun startListening() = host.startListening()
     fun stopListening() = host.stopListening()
@@ -372,11 +363,7 @@ class Widgets(
     }
 
     /** Returns true if the result belonged to the widget flow. */
-    fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
-        // The result says which widget it's for; trust it over what was saved, if it's there.
-        data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
-            ?.takeIf { it != AppWidgetManager.INVALID_APPWIDGET_ID && requestCode != REQUEST_RECONFIGURE }
-            ?.let { pendingId = it }
+    fun onActivityResult(requestCode: Int, resultCode: Int): Boolean {
         when (requestCode) {
             REQUEST_BIND ->
                 if (resultCode == Activity.RESULT_OK) configure(manager.getAppWidgetInfo(pendingId)) else cancelPending()
