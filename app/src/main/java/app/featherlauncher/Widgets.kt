@@ -8,12 +8,12 @@ import android.appwidget.AppWidgetProviderInfo
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.BaseAdapter
@@ -105,7 +105,11 @@ class Widgets(
 
         val list = ListView(activity).apply {
             divider = null
-            selector = ColorDrawable(0)
+            // The keypad highlight: the same ring as everywhere else, just outside the card
+            // (rows are inset SPACE_S at the sides, SPACE_XS above and below). No touch highlight.
+            selector = android.graphics.drawable.InsetDrawable(Ui.focusRing(activity, Ui.RADIUS_L + Ui.SPACE_XS),
+                dp(Ui.SPACE_S - Ui.SPACE_XS), 0, dp(Ui.SPACE_S - Ui.SPACE_XS), 0)
+            setDrawSelectorOnTop(true)
             overScrollMode = View.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             clipToPadding = false
@@ -113,6 +117,7 @@ class Widgets(
         }
         val adapter = PickerAdapter(rows)
         list.adapter = adapter
+        list.setOnKeyListener { _, code, event -> stepPicker(list, rows, code, event) }
         list.setOnItemClickListener { _, _, position, _ ->
             when (val row = rows[position]) {
                 is PickerRow.Widget -> {
@@ -143,6 +148,37 @@ class Widgets(
                 adapter.notifyDataSetChanged()
             }
         }
+    }
+
+    /**
+     * Up and down in the picker with the keypad: from widget to widget, never onto an app's
+     * name, each brought whole into view. Left to itself, the list scrolls a tall row part of
+     * the way first with nothing selected, and OK then does nothing.
+     */
+    private fun stepPicker(list: ListView, rows: List<PickerRow>, code: Int, event: KeyEvent): Boolean {
+        val step = when (code) {
+            KeyEvent.KEYCODE_DPAD_DOWN -> 1
+            KeyEvent.KEYCODE_DPAD_UP -> -1
+            else -> return false
+        }
+        if (event.action != KeyEvent.ACTION_DOWN) return true
+        val from = list.selectedItemPosition
+        var next = if (from == ListView.INVALID_POSITION) list.firstVisiblePosition else from + step
+        while (next in rows.indices && rows[next] is PickerRow.Header) next += step
+        if (next !in rows.indices) return true
+        val view = list.getChildAt(next - list.firstVisiblePosition)
+        val bottom = list.height - list.paddingBottom
+        val header = list.getChildAt(next - 1 - list.firstVisiblePosition)?.takeIf { rows[next - 1] is PickerRow.Header }
+        val top = when {
+            // Whole on screen already: only the highlight moves.
+            view != null && view.top >= 0 && view.bottom <= bottom -> view.top
+            // Coming from above: its bottom at the bottom of the list.
+            view != null && step > 0 -> (bottom - view.height).coerceAtLeast(0)
+            // Coming from below: at the top, under its app's name if it's the app's first.
+            else -> (header?.height ?: 0).coerceAtMost(bottom - (view?.height ?: 0)).coerceAtLeast(0)
+        }
+        list.setSelectionFromTop(next, top)
+        return true
     }
 
     /** Every other app's widgets, under the app's name, apps in alphabetical order. */
@@ -182,6 +218,8 @@ class Widgets(
             is PickerRow.Widget -> 1
             is PickerRow.Feather -> 2
         }
+        // Without this, the list ignores isEnabled and the keypad lands on the apps' names too.
+        override fun areAllItemsEnabled() = false
         override fun isEnabled(position: Int) = rows[position] !is PickerRow.Header
 
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
