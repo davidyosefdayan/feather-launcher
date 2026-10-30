@@ -1990,14 +1990,12 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     // region Menus
 
-    private fun homeMenu(anchor: Rect) = overlays.showMenu(
-        null,
-        listOf(
-            MenuItem("Add widget", R.drawable.ic_widgets) { widgets.pick() },
-            MenuItem("Wallpaper", R.drawable.ic_wallpaper) { startActivity(Intent(this, WallpaperActivity::class.java)) },
-            MenuItem("Settings", R.drawable.ic_settings) { startActivity(Intent(this, SettingsActivity::class.java)) },
-        ),
-        anchor,
+    private fun homeMenu(anchor: Rect) = overlays.showMenu(null, homeMenuItems(), anchor)
+
+    override fun homeMenuItems() = listOf(
+        MenuItem("Add widget", R.drawable.ic_widgets) { widgets.pick() },
+        MenuItem("Wallpaper", R.drawable.ic_wallpaper) { startActivity(Intent(this, WallpaperActivity::class.java)) },
+        MenuItem("Settings", R.drawable.ic_settings) { startActivity(Intent(this, SettingsActivity::class.java)) },
     )
 
     private fun appMenu(entry: AppEntry, row: View) {

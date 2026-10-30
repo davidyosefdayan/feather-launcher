@@ -57,6 +57,8 @@ class HomeScreen(
         fun returnToDrawer(entry: AppEntry, x: Float, y: Float)
         /** Cancels the touch gesture currently going to the views, once a drag takes it over. */
         fun cancelViewTouches()
+        /** The home screen's own options (Add widget, Wallpaper, Settings). */
+        fun homeMenuItems(): List<MenuItem>
     }
 
     val workspace = Workspace(activity)
@@ -349,6 +351,9 @@ class HomeScreen(
     /** Opens the item's menu (also used by the keypad Menu key). */
     fun showItemMenu(item: HomeItem, view: View) {
         val anchor = rectInRoot(view)
+        // With the keypad something on the home screen is always highlighted, so the Menu key
+        // never reaches the home screen's own menu; its options come last in every item's instead.
+        val home = if (view.isInTouchMode) emptyList() else listOf(host.homeMenuItems())
         when (item.type) {
             HomeItem.Type.APP -> {
                 val entry = repo.find(item.ref) ?: return
@@ -362,28 +367,28 @@ class HomeScreen(
                             MenuItem("Rename", R.drawable.ic_edit) { rename(item, entry.label) },
                             MenuItem("Remove", R.drawable.ic_close, danger = true) { remove(item) },
                         ),
-                    ),
+                    ) + home,
                     anchor, repo.icon(entry),
                 ) { host.showAppInfo(entry) }
             }
-            HomeItem.Type.FOLDER -> overlays.showMenu(item.label ?: FOLDER_NAME, listOf(
+            HomeItem.Type.FOLDER -> overlays.showMenu(item.label ?: FOLDER_NAME, listOf(listOf(
                 MenuItem("Move", R.drawable.ic_move) { startKeyMove(item) },
                 MenuItem("Rename", R.drawable.ic_edit) { rename(item, FOLDER_NAME) },
                 MenuItem("Remove", R.drawable.ic_close, danger = true) { remove(item) },
-            ), anchor, folderIcon(item))
-            HomeItem.Type.CLOCK -> overlays.showMenu(clockName(item), listOfNotNull(
+            )) + home, anchor, folderIcon(item))
+            HomeItem.Type.CLOCK -> overlays.showMenu(clockName(item), listOf(listOfNotNull(
                 featherSettings(item),
                 MenuItem("Move", R.drawable.ic_move) { startKeyMove(item) },
                 MenuItem("Resize", R.drawable.ic_height) { startResize(item) },
                 MenuItem("Remove", R.drawable.ic_close, danger = true) { remove(item) },
-            ), anchor)
+            )) + home, anchor)
             HomeItem.Type.WIDGET -> {
                 val info = widgets.info(item.ref.toInt())
                 val label = info?.loadLabel(activity.packageManager) ?: "Widget"
                 val items = mutableListOf(MenuItem("Move", R.drawable.ic_move) { startKeyMove(item) })
                 if (info != null && info.resizeMode != 0) items += MenuItem("Resize", R.drawable.ic_height) { startResize(item) }
                 items += MenuItem("Remove", R.drawable.ic_close, danger = true) { remove(item) }
-                overlays.showMenu(label, items, anchor, info?.provider?.packageName?.let { pkg ->
+                overlays.showMenu(label, listOf(items) + home, anchor, info?.provider?.packageName?.let { pkg ->
                     repo.apps.firstOrNull { it.packageName == pkg }?.let(repo::icon)
                 })
             }
