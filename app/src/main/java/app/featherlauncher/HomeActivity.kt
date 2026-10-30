@@ -221,7 +221,8 @@ class HomeActivity : Activity(), HomeScreen.Host {
     /**
      * An invisible place for the keypad highlight to rest. Pressing a key (even Home) takes the
      * phone out of touch mode, and Android then highlights the first thing it finds, the widget.
-     * Coming home, the highlight rests here instead, and only appears once an arrow is pressed.
+     * After a touch, or once the app list closes, the highlight rests here instead, and only
+     * appears once an arrow is pressed. Coming home, it starts in the dock (see [focusDockStart]).
      */
     private val focusPark by lazy {
         View(this).apply {
@@ -238,10 +239,32 @@ class HomeActivity : Activity(), HomeScreen.Host {
         focusPark.requestFocus()
     }
 
+    /**
+     * Coming home with the keypad: the highlight is already on the leftmost item in the dock,
+     * so OK opens it and the arrows move from it, without a key press to show it first.
+     */
+    private fun focusDockStart() {
+        if (drawerOpen || overlays.isShowing) return
+        // Until the window has focus again it can still be in touch mode from before, which
+        // refuses the highlight; then it's tried again once it has (onWindowFocusChanged).
+        startInDock = !homeScreen.focusDockStart()
+        if (startInDock) focusPark.requestFocus()
+    }
+
+    /** Coming home, the highlight couldn't go in the dock yet (see [focusDockStart]). */
+    private var startInDock = false
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus || !startInDock) return
+        startInDock = false
+        // Only if nothing else took the highlight meanwhile.
+        if (!drawerOpen && !overlays.isShowing && (currentFocus == null || currentFocus === focusPark)) homeScreen.focusDockStart()
+    }
+
     override fun onResume() {
         super.onResume()
         running = this
-        parkFocus()
         if (::smartSearch.isInitialized) preloadSearch()
         // Settings may have changed on the settings page.
         prefs.reload()
@@ -256,6 +279,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         repo.setShape(prefs.iconShape)
         applyDarkMode()
         homeScreen.bindAll()
+        focusDockStart()
         updateResults()
         watchLimits()
         NotificationBadges.onChange = badgesChanged
@@ -320,7 +344,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         if (openFromKey(intent.getStringExtra(EXTRA_OPEN))) return
         if (!drawerOpen) homeScreen.pages.snapTo(0)
         hideDrawer()
-        parkFocus()
+        focusDockStart()
     }
 
     @Deprecated("Platform Activity API")
@@ -1966,14 +1990,12 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     // region Menus
 
-    private fun homeMenu(anchor: Rect) = overlays.showMenu(
-        null,
-        listOf(
-            MenuItem("Add widget", R.drawable.ic_widgets) { widgets.pick() },
-            MenuItem("Wallpaper", R.drawable.ic_wallpaper) { startActivity(Intent(this, WallpaperActivity::class.java)) },
-            MenuItem("Settings", R.drawable.ic_settings) { startActivity(Intent(this, SettingsActivity::class.java)) },
-        ),
-        anchor,
+    private fun homeMenu(anchor: Rect) = overlays.showMenu(null, homeMenuItems(), anchor)
+
+    override fun homeMenuItems() = listOf(
+        MenuItem("Add widget", R.drawable.ic_widgets) { widgets.pick() },
+        MenuItem("Wallpaper", R.drawable.ic_wallpaper) { startActivity(Intent(this, WallpaperActivity::class.java)) },
+        MenuItem("Settings", R.drawable.ic_settings) { startActivity(Intent(this, SettingsActivity::class.java)) },
     )
 
     private fun appMenu(entry: AppEntry, row: View) {
