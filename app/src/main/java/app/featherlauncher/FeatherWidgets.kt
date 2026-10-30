@@ -325,7 +325,7 @@ class WeatherWidget(context: Context, item: HomeItem) : CardWidget(context, item
     override fun refresh() {
         content.removeAllViews()
         content.spread = false
-        val place = ClockInfo(context).place()
+        val place = ClockInfo(context).place { if (isAttachedToWindow) refresh() }
         if (place == null) {
             content.addView(heading(R.drawable.ic_location, "Weather"))
             content.addView(gapAbove(quiet("Choose a location in Settings, under Calendar and times."), 10))
@@ -679,7 +679,7 @@ class ZmanimWidget(context: Context, item: HomeItem) : CardWidget(context, item)
         content.removeAllViews()
         content.gravity = Gravity.TOP
         val info = ClockInfo(context)
-        val place = info.place()
+        val place = info.place { if (isAttachedToWindow) refresh() }
         val zmanim = Prefs(context).dailyZmanim
         content.addView(heading(R.drawable.ic_sunrise, if (zmanim) "Zmanim" else "Sunrise and sunset", place?.name))
         if (place == null) {

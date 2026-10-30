@@ -4,9 +4,12 @@ import android.Manifest
 import android.content.ContentUris
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.Geocoder
+import android.location.Location
 import android.location.LocationManager
 import android.provider.CalendarContract
 import org.json.JSONObject
+import java.util.Locale
 import java.util.TimeZone
 import kotlin.math.abs
 
@@ -34,16 +37,69 @@ class ClockInfo(private val context: Context) {
 
     private val prefs = Prefs(context)
 
-    /** The chosen city, else where the phone is (or last was); null if neither is known. */
-    fun place(): Place? {
+    /**
+     * The chosen city, else where the phone is (or last was); null if neither is known. Where the
+     * phone is goes by its town's name once that's been looked up; [named] runs on the main thread
+     * when a new name arrives.
+     */
+    fun place(named: (() -> Unit)? = null): Place? {
         prefs.chosenPlace?.let { return it }
         if (context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             val lm = context.getSystemService(LocationManager::class.java)
             val fix = lm.getProviders(true).mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }.maxByOrNull { it.time }
             if (fix != null) prefs.lastPlace = fix.latitude to fix.longitude
         }
-        return prefs.lastPlace?.let { (lat, lon) -> Place("Current location", lat, lon) }
+        val (lat, lon) = prefs.lastPlace ?: return null
+        // A name looked up a little way off still stands while the new one is found.
+        val known = prefs.lastPlaceName?.takeIf { (_, at) -> metres(at, lat, lon) < NAME_KEPT }
+        if (known == null || metres(known.second, lat, lon) > NAME_FRESH) lookUp(lat, lon, named)
+        return Place(known?.first ?: "Current location", lat, lon)
     }
+
+    /**
+     * Finds the name of the town at [lat], [lon] in the background: the phone's geocoder, else
+     * OpenStreetMap's (for phones without one).
+     */
+    private fun lookUp(lat: Double, lon: Double, named: (() -> Unit)?) {
+        if (looking || System.currentTimeMillis() - failedAt < RETRY) return
+        looking = true
+        Thread {
+            val name = geocoder(lat, lon) ?: osm(lat, lon)
+            looking = false
+            if (name == null) {
+                failedAt = System.currentTimeMillis()
+                return@Thread
+            }
+            prefs.lastPlaceName = name to (lat to lon)
+            named?.let { android.os.Handler(android.os.Looper.getMainLooper()).post(it) }
+        }.start()
+    }
+
+    @Suppress("DEPRECATION") // The listener version only adds a thread; this already runs on one.
+    private fun geocoder(lat: Double, lon: Double): String? = if (!Geocoder.isPresent()) null else runCatching {
+        Geocoder(context, Locale.getDefault()).getFromLocation(lat, lon, 1)?.firstOrNull()
+            // New York gives no town, only the borough ("Brooklyn") and its county ("Kings County").
+            ?.let { it.locality ?: it.subLocality ?: it.subAdminArea ?: it.adminArea }
+    }.getOrNull()
+
+    private fun osm(lat: Double, lon: Double): String? = runCatching {
+        val url = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&lat=$lat&lon=$lon&accept-language=" +
+            Locale.getDefault().toLanguageTag()
+        val text = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).run {
+            connectTimeout = 10_000
+            readTimeout = 15_000
+            // OpenStreetMap asks every app to name itself.
+            setRequestProperty("User-Agent", "FeatherLauncher (https://github.com/davidyosefdayan/feather-launcher)")
+            inputStream.bufferedReader().use { it.readText() }
+        }
+        val o = JSONObject(text)
+        val address = o.optJSONObject("address")
+        listOf("city", "town", "village", "municipality").firstNotNullOfOrNull { address?.optString(it)?.ifEmpty { null } }
+            ?: o.optString("name").ifEmpty { null }
+    }.getOrNull()
+
+    private fun metres(at: Pair<Double, Double>, lat: Double, lon: Double) =
+        FloatArray(1).also { Location.distanceBetween(at.first, at.second, lat, lon, it) }[0]
 
     fun zmanim(day: Long, place: Place) = Zmanim.forDay(day, place, prefs.zmanMagenAvraham, prefs.candleMinutes, sunOnly = !prefs.dailyZmanim)
 
@@ -97,6 +153,13 @@ class ClockInfo(private val context: Context) {
 
     companion object {
         private const val DAY = 24 * 60 * 60_000L
+        /** Moving further than this looks the name up again; further than [NAME_KEPT], the old one is dropped. */
+        private const val NAME_FRESH = 1_000f
+        private const val NAME_KEPT = 5_000f
+        private const val RETRY = 10 * 60_000L
+
+        @Volatile private var looking = false
+        @Volatile private var failedAt = 0L
 
         /**
          * Places matching [query]: Jewish communities first (from [COMMUNITIES], so they're found
