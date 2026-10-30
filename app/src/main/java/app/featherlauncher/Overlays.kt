@@ -101,33 +101,41 @@ class Overlays(private val root: FrameLayout, private val palette: () -> Palette
     ) {
         val p = palette()
         val ctx = root.context
-        val card = LinearLayout(ctx).apply {
+        val column = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
+            setPadding(dp(MENU_PADDING), dp(MENU_PADDING), dp(MENU_PADDING), dp(MENU_PADDING))
+        }
+        // A menu taller than the screen (a small one, with many options) scrolls instead of
+        // losing its last options off the edge; the keypad scrolls it as the highlight moves.
+        val card = android.widget.ScrollView(ctx).apply {
             // Outer corner = group corner + padding, so the curves run parallel.
             background = Ui.rounded(ctx, p.surface, MENU_ROW_RADIUS + MENU_PADDING)
             elevation = dp(8).toFloat()
-            setPadding(dp(MENU_PADDING), dp(MENU_PADDING), dp(MENU_PADDING), dp(MENU_PADDING))
             clipToOutline = true
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(column)
         }
-        if (title != null) card.addView(menuHeader(title, icon, iconRes, info, p))
+        if (title != null) column.addView(menuHeader(title, icon, iconRes, info, p))
         // Options sit straight on the menu; a thin line separates groups (and the header).
         groups.filter { it.isNotEmpty() }.forEachIndexed { i, group ->
-            if (i > 0 || title != null) card.addView(divider(p))
-            group.forEach { card.addView(menuRow(it, p)) }
+            if (i > 0 || title != null) column.addView(divider(p))
+            group.forEach { column.addView(menuRow(it, p)) }
         }
 
-        val width = dp(244)
-        card.measure(
-            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(root.height, View.MeasureSpec.AT_MOST),
-        )
-        val height = card.measuredHeight
         val margin = dp(Ui.SPACE_M)
         val gap = dp(Ui.SPACE_S)
+        // Narrower on a screen too small for the usual width (a keypad phone at a large display size).
+        val width = minOf(dp(244), root.width - 2 * margin)
+        card.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(root.height - insets.top - insets.bottom - 2 * margin, View.MeasureSpec.AT_MOST),
+        )
+        val height = card.measuredHeight
         val x = (anchor.centerX() - width / 2).coerceIn(margin, root.width - width - margin)
         val above = anchor.top - gap - height
         val y = if (above >= insets.top + margin) above else (anchor.bottom + gap).coerceAtMost(root.height - insets.bottom - height - margin)
-        card.layoutParams = FrameLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+        card.layoutParams = FrameLayout.LayoutParams(width, height).apply {
             leftMargin = x
             topMargin = y.coerceAtLeast(insets.top + margin)
         }
