@@ -1,0 +1,44 @@
+# Comments on a pull request with a link to its Feather Dev build. It's separate from
+# dev-build.yml because a fork's pull request can't comment itself. This never checks out or runs
+# the pull request's code; it only reads the finished run's artifact list.
+name: Feather Dev link
+
+on:
+  workflow_run:
+    workflows: [Feather Dev]
+    types: [completed]
+
+permissions:
+  actions: read
+  pull-requests: write
+
+jobs:
+  comment:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - run: |
+          artifact=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID/artifacts" \
+            -q '.artifacts[] | select(.name | test("^FeatherDev-pr[0-9]+$")) | "\(.id) \(.name)"' | head -1)
+          [ -n "$artifact" ] || { echo "No Feather Dev artifact"; exit 0; }
+          id=${artifact% *}
+          pr=${artifact##*-pr}
+          # Only the pull request this run built.
+          [ "$(gh pr view "$pr" --json headRefOid -q .headRefOid)" = "$HEAD_SHA" ] || { echo "Not PR $pr's latest commit"; exit 0; }
+          marker='<!-- feather-dev-build -->'
+          body="$marker
+          **Feather Dev** for ${HEAD_SHA:0:7}: [download](https://github.com/$GH_REPO/actions/runs/$RUN_ID/artifacts/$id) (sign in to GitHub; it comes as a zip with the APK inside).
+          It installs next to the real Feather and updates any other Feather Dev build in place."
+          body=$(printf '%s\n' "$body" | sed 's/^          //')
+          existing=$(gh api "repos/$GH_REPO/issues/$pr/comments" --paginate \
+            -q ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | head -1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$GH_REPO/issues/comments/$existing" -f body="$body" > /dev/null
+          else
+            gh pr comment "$pr" --body "$body"
+          fi

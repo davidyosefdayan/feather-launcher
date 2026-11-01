@@ -1,0 +1,33 @@
+# Builds Feather Dev for every pull request, forks included, so it can be tried on a phone next
+# to the real Feather. It only uses the public test key in the repo, never any secrets.
+# dev-build-comment.yml then links the APK on the pull request.
+name: Feather Dev
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dev-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v6
+      - run: ./gradlew assembleDebug
+      - run: mv app/build/outputs/apk/debug/app-debug.apk FeatherDev-pr${{ github.event.pull_request.number }}.apk
+      # The comment workflow reads the pull request's number from the artifact's name.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: FeatherDev-pr${{ github.event.pull_request.number }}
+          path: FeatherDev-pr${{ github.event.pull_request.number }}.apk
+          retention-days: 30
