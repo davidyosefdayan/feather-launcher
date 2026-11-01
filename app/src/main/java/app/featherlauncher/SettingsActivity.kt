@@ -77,7 +77,12 @@ class SettingsActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
-        build()
+        // Once onResume has redrawn the page: a sheet opened before that (Restore this backup?)
+        // would be wiped away with it.
+        root.post { onResult(requestCode, resultCode, data) }
+    }
+
+    private fun onResult(requestCode: Int, resultCode: Int, data: Intent?) {
         val uri = data?.data
         if (resultCode == RESULT_OK && uri != null) {
             if (requestCode == REQUEST_BACKUP) return saveBackup(uri)
