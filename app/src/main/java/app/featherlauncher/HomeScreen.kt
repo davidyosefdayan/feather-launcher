@@ -113,14 +113,26 @@ class HomeScreen(
         pageRings += pageTarget
         pages.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> placePageTarget() }
         pages.onSlide = ::fadeRings
+        // A touch ends the keypad's highlight on the page, as it does everywhere else.
+        root.viewTreeObserver.addOnTouchModeChangeListener { touch -> if (touch && pageTarget.isFocused) pageTarget.clearFocus() }
     }
 
     /**
      * The page's outline, for the keypad here and while dragging: around its grid, where each
      * widget's own highlight is drawn too, so it sits as far outside the cards as theirs does.
      */
-    private fun pageBounds(): Rect = rectInRoot(pages).let { box ->
-        Rect(box.left + dp(Ui.BAR_MARGIN), box.top + dp(Workspace.PAGE_TOP), box.right - dp(Ui.BAR_MARGIN), box.bottom)
+    private fun pageBounds(): Rect {
+        // Where the page rests, from the layout: the home screen slides away as the app list
+        // opens, and the outline mustn't be left where it was mid-slide.
+        var x = 0
+        var y = 0
+        var v: View = pages
+        while (v !== root) {
+            x += v.left
+            y += v.top
+            v = v.parent as View
+        }
+        return Rect(x + dp(Ui.BAR_MARGIN), y + dp(Workspace.PAGE_TOP), x + pages.width - dp(Ui.BAR_MARGIN), y + pages.height)
     }
 
     private fun placePageTarget() {
