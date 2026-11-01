@@ -36,6 +36,7 @@ class NotificationService : NotificationListenerService() {
         media?.stop()
         media = null
         NotificationBadges.clear()
+        ActiveNotifications.clear()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
@@ -48,7 +49,11 @@ class NotificationService : NotificationListenerService() {
     // Someone turned an app's notification dots on or off.
     override fun onNotificationRankingUpdate(rankingMap: RankingMap) = recount()
 
-    private fun recount() = NotificationBadges.update(this, runCatching { activeNotifications }.getOrNull())
+    private fun recount() {
+        val active = runCatching { activeNotifications }.getOrNull()
+        NotificationBadges.update(this, active)
+        ActiveNotifications.update(this, active)
+    }
 
     private fun filter(sbn: StatusBarNotification) {
         val n = sbn.notification
@@ -95,7 +100,9 @@ class NotificationService : NotificationListenerService() {
     companion object {
         private const val PERMANENT_SNOOZE = 5 * 60 * 60 * 1000L
 
-        private var running: NotificationService? = null
+        /** The service while it's connected, also to dismiss notifications that go when they're opened. */
+        @Volatile var running: NotificationService? = null
+            private set
 
         /** Who has a notification showing right now (empty without notification access). */
         fun showingFrom(): List<String> = runCatching { running?.activeNotifications?.map { it.packageName } }.getOrNull().orEmpty()

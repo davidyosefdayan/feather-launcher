@@ -360,6 +360,12 @@ class HomeScreen(
                             .putExtra(SettingsActivity.EXTRA_PAGE, SettingsActivity.Page.CALENDAR.name))
                     }
                 }
+                is NotificationsWidget -> {
+                    onMore = { NotificationsSheet.show(activity, palette(), overlays) }
+                    onAllow = { Setup.NOTIFICATIONS.start(activity) }
+                    // Opening one up brings new buttons; the keypad reaches them as it did the rows.
+                    onRebuilt = { if (inside === this) pressablesIn(this).forEach { keyTarget(it, this) } }
+                }
             }
             setOnLongClickListener { onItemLongPress(item, it); true }
         } ?: if (FeatherKind.of(item) == FeatherKind.ANALOG) AnalogClockWidget(activity, item).apply {
@@ -2032,7 +2038,10 @@ class HomeScreen(
             if (from == null) {
                 inside = null
             } else {
-                nearest(from, parts - from, direction)?.requestFocusFromTouch()
+                // Text that scrolls (an opened notification's) scrolls first; at its end, the highlight moves on.
+                // A notification's line takes left and right, to clear it.
+                if ((from as? SwipesAway)?.swipeAway(direction) == true) return true
+                if (!scrollIn(from, direction)) nearest(from, parts - from, direction)?.requestFocusFromTouch()
                 return true
             }
         }
@@ -2172,6 +2181,8 @@ class HomeScreen(
     /** Back inside a widget: out to the widget itself. Returns false when not inside one. */
     fun leaveWidget(): Boolean {
         val widget = inside ?: return false
+        // A notification opened up to show its buttons closes first.
+        if ((widget as? NotificationsWidget)?.collapse() == true && activity.currentFocus?.isInTouchMode == false) return true
         inside = null
         // Gone from it already (a touch, say): Back does its usual thing.
         if (activity.currentFocus?.let { it.isInTouchMode || it !in pressablesIn(widget) } != false) return false
@@ -2200,6 +2211,24 @@ class HomeScreen(
 
     private fun itemsOn(page: Int): List<View> = workspace.items.filter { it.page == page }
         .mapNotNull { views[it.id] }.filter { it.isFocusable && it.visibility == View.VISIBLE }
+
+    /** Scrolls what can scroll inside [view] up or down by most of its height. Returns false when nothing can go further. */
+    private fun scrollIn(view: View, direction: Int): Boolean {
+        if (direction != View.FOCUS_UP && direction != View.FOCUS_DOWN) return false
+        val way = if (direction == View.FOCUS_DOWN) 1 else -1
+        fun find(v: View): View? = if (v.canScrollVertically(way)) v
+            else (v as? ViewGroup)?.let { g -> (0 until g.childCount).firstNotNullOfOrNull { find(g.getChildAt(it)) } }
+        val scroller = find(view) ?: return false
+        // Text moves by whole lines, keeping one of the last in sight, so a line is never left cut in half.
+        val line = ((scroller as? ViewGroup)?.getChildAt(0) as? TextView)?.lineHeight
+        val step = if (line != null && line > 0) {
+            val lines = (scroller.height / line - 1).coerceAtLeast(1)
+            val top = scroller.scrollY / line + if (way < 0 && scroller.scrollY % line > 0) 1 else 0
+            (top + way * lines).coerceAtLeast(0) * line - scroller.scrollY
+        } else way * scroller.height * 2 / 3
+        if (scroller is android.widget.ScrollView) scroller.smoothScrollBy(0, step) else scroller.scrollBy(0, step)
+        return true
+    }
 
     /** What can be pressed inside [widget], each only once (not what's inside a button too). */
     private fun pressablesIn(widget: View): List<View> {
