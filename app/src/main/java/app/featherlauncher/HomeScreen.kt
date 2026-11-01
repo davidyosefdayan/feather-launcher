@@ -1312,7 +1312,7 @@ class HomeScreen(
         private fun folderCandidate(page: Int, col: Int, row: Int, view: View): HomeItem? {
             if (source?.item?.type == HomeItem.Type.FOLDER) return null
             val occupant = workspace.on(page).firstOrNull {
-                it.x == col && it.y == row && it !== source?.item && it !== source?.folder && it !in shifted.keys &&
+                it.x == col && it.y == row && it !== source?.item && it !== source?.folder && it !in shifted.keys && it !== bumped?.first &&
                     (it.type == HomeItem.Type.APP || it.type == HomeItem.Type.FOLDER)
             } ?: return null
             val cells = containerFor(page)
@@ -1374,6 +1374,7 @@ class HomeScreen(
             val (page, x, y) = hoverCell ?: return
             if (page == Workspace.DOCK && w == 1 && h == 1) {
                 setShifted(emptyMap())
+                setBumped(null)
                 return overDock(x)
             }
             leaveDock()
@@ -1383,13 +1384,49 @@ class HomeScreen(
                     // No way to make room here (a widget, or a full page): use the closest free spot.
                     setShifted(emptyMap())
                     val spot = workspace.nearestSpot(page, x, y, w, h, source?.item)
-                    setTarget(spot?.let { Triple(page, it.first, it.second) })
+                    val swap = if (spot == null) bumpCandidate(page, x, y) else null
+                    setBumped(swap)
+                    setTarget(spot?.let { Triple(page, it.first, it.second) } ?: swap?.let { Triple(page, x, y) })
                 }
                 else -> {
+                    setBumped(null)
                     setShifted(plan)
                     setTarget(Triple(page, x, y))
                 }
             }
+        }
+
+        /**
+         * On a full page, the app or folder at ([x], [y]) makes way by going to the page the dragged
+         * one came from, into the place it left, much as it would slide aside were there room.
+         * Null for anything else: a widget in the way, or something dragged in from the dock,
+         * the app list or a folder, as there's no place on a page it left.
+         */
+        private fun bumpCandidate(page: Int, x: Int, y: Int): Pair<HomeItem, Triple<Int, Int, Int>>? {
+            val dragged = source?.item ?: return null
+            if (dragged.page < 0 || dragged.page == page || dragged.w != 1 || dragged.h != 1) return null
+            val occupant = workspace.on(page).firstOrNull { it.x == x && it.y == y } ?: return null
+            if (occupant.w != 1 || occupant.h != 1) return null
+            return occupant to Triple(dragged.page, dragged.x, dragged.y)
+        }
+
+        /** The app sent to the dragged one's old page, with where it goes there. Nothing is saved until drop. */
+        private var bumped: Pair<HomeItem, Triple<Int, Int, Int>>? = null
+
+        /** Shrinks the app being sent away out of its cell (and brings back one that no longer is). */
+        private fun setBumped(next: Pair<HomeItem, Triple<Int, Int, Int>>?) {
+            if (next?.first === bumped?.first) {
+                bumped = next
+                return
+            }
+            bumped?.first?.let { old ->
+                views[old.id]?.animate()?.scaleX(1f)?.scaleY(1f)?.alpha(1f)?.setDuration(180)?.start()
+            }
+            next?.first?.let { item ->
+                views[item.id]?.animate()?.scaleX(0.6f)?.scaleY(0.6f)?.alpha(0f)?.setDuration(180)
+                    ?.setInterpolator(DecelerateInterpolator(2f))?.start()
+            }
+            bumped = next
         }
 
         /**
@@ -1492,8 +1529,16 @@ class HomeScreen(
                     views[item.id]?.apply { animate().cancel(); translationX = 0f; translationY = 0f }
                 }
                 shifted = emptyMap()
+                bumped?.let { (item, place) ->
+                    item.page = place.first
+                    item.x = place.second
+                    item.y = place.third
+                    views[item.id]?.apply { animate().cancel(); scaleX = 1f; scaleY = 1f; alpha = 1f }
+                }
+                bumped = null
             } else {
                 setShifted(emptyMap())
+                setBumped(null)
             }
         }
 
