@@ -594,6 +594,28 @@ class SettingsActivity : Activity() {
             overlays.showSheet("Updates", column)
             return
         }
+        fun check() {
+            say("Checking…")
+            updates.check { ok ->
+                when {
+                    !ok -> say("Couldn't check. Make sure you're online and try again.")
+                    updates.available == null && release == null -> say("You have the newest version.")
+                    else -> {
+                        overlays.dismiss()
+                        build()
+                        updatesSheet()
+                    }
+                }
+            }
+        }
+        fun addBetaSwitch() {
+            column.addView(Components.toggleRow(this, p, R.drawable.ic_set_code, "Get beta updates", updates.betas) {
+                updates.betas = it
+                check()
+            })
+            column.addView(Components.footnote(this, p,
+                "Betas are test builds of what's coming next, made after every change. They can have bugs."))
+        }
         if (release == null) {
             column.addView(TextView(this).apply {
                 text = "You have version ${updates.currentVersion}."
@@ -601,27 +623,8 @@ class SettingsActivity : Activity() {
                 setPadding(dp(Ui.SPACE_XL), 0, dp(Ui.SPACE_XL), dp(Ui.SPACE_M))
             })
             column.addView(status)
-            fun check() {
-                say("Checking…")
-                updates.check { ok ->
-                    when {
-                        !ok -> say("Couldn't check. Make sure you're online and try again.")
-                        updates.available == null -> say("You have the newest version.")
-                        else -> {
-                            overlays.dismiss()
-                            build()
-                            updatesSheet()
-                        }
-                    }
-                }
-            }
             column.addView(Components.row(this, p, R.drawable.ic_refresh, "Check for updates", color = p.accent) { check() })
-            column.addView(Components.toggleRow(this, p, R.drawable.ic_set_code, "Get beta updates", updates.betas) {
-                updates.betas = it
-                check()
-            })
-            column.addView(Components.footnote(this, p,
-                "Betas are test builds of what's coming next, made after every change. They can have bugs."))
+            addBetaSwitch()
             overlays.showSheet("Updates", column)
             return
         }
@@ -662,6 +665,7 @@ class SettingsActivity : Activity() {
         }
         installRow = Components.row(this, p, R.drawable.ic_arrow_downward, "Install ${release.version}", color = p.accent) { install() }
         column.addView(installRow)
+        addBetaSwitch()
         overlays.showSheet("Feather Launcher ${release.version}", column, scrollable = notes)
         if (installNow) install()
     }

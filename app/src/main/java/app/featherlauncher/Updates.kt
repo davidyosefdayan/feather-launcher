@@ -25,8 +25,9 @@ import java.util.concurrent.Executors
  * hands it to Android's installer, which only accepts it if it's signed with the same key.
  */
 class Updates private constructor(private val context: Context) {
-    /** [code] is a beta's versionCode, which is how betas are compared; 0 for a release. */
-    class Release(val version: String, val apkUrl: String, val size: Long, val sha256: String?, val notes: String, val code: Long = 0)
+    /** [code] is a beta's versionCode, which is how betas are compared; 0 for a release. [published] is when it came out. */
+    class Release(val version: String, val apkUrl: String, val size: Long, val sha256: String?, val notes: String,
+        val code: Long = 0, val published: Long = 0)
 
     private val sp = context.getSharedPreferences("updates", Context.MODE_PRIVATE)
     private val io = Executors.newSingleThreadExecutor()
@@ -71,9 +72,8 @@ class Updates private constructor(private val context: Context) {
             main.post {
                 latest.onSuccess { release ->
                     sp.edit().putLong("checked", System.currentTimeMillis()).apply()
-                    // The beta, unless a newer release came out since it was made.
-                    save(beta?.takeIf { isNewerThanThis(it) && (release == null || !isNewer(release.version, it.version)) }
-                        ?: release?.takeIf { isNewerThanThis(it) })
+                    // Of the release and the beta, whichever came out last.
+                    save(listOfNotNull(release, beta).filter(::isNewerThanThis).maxByOrNull { it.published })
                 }
                 done(latest.isSuccess)
             }
@@ -190,18 +190,23 @@ class Updates private constructor(private val context: Context) {
             if (release == null) remove("release")
             else putString("release", JSONObject()
                 .put("version", release.version).put("url", release.apkUrl).put("size", release.size)
-                .put("sha256", release.sha256).put("notes", release.notes).put("code", release.code).toString())
+                .put("sha256", release.sha256).put("notes", release.notes).put("code", release.code).put("published", release.published).toString())
         }.apply()
     }
 
     /** The saved release, unless this version has caught up with it (it was just installed). */
     private fun load(): Release? = runCatching {
         val o = JSONObject(sp.getString("release", null) ?: return null)
-        Release(o.getString("version"), o.getString("url"), o.optLong("size"), o.optString("sha256").ifEmpty { null }, o.optString("notes"), o.optLong("code"))
+        Release(o.getString("version"), o.getString("url"), o.optLong("size"), o.optString("sha256").ifEmpty { null }, o.optString("notes"),
+            o.optLong("code"), o.optLong("published"))
     }.getOrNull()?.takeIf { isNewerThanThis(it) }
 
-    private fun isNewerThanThis(release: Release) =
-        if (release.code > 0) release.code > currentCode else isNewer(release.version, currentVersion)
+    private fun isNewerThanThis(release: Release) = when {
+        release.code > 0 -> release.code > currentCode
+        isNewer(release.version, currentVersion) -> true
+        // The release a beta led up to ("1.7" over "1.7 beta 120"), if it came out after the beta was installed.
+        else -> " beta " in currentVersion && !isNewer(currentVersion, release.version) && release.published > info.lastUpdateTime
+    }
 
     private fun fetch(url: String): String = open(url).apply {
         setRequestProperty("Accept", "application/vnd.github+json")
@@ -255,7 +260,8 @@ class Updates private constructor(private val context: Context) {
             val beta = o.getString("tag_name") == "beta"
             val version = if (beta) o.optString("name").removePrefix("Feather Launcher ") else o.getString("tag_name").removePrefix("v")
             return Release(version, apk.getString("browser_download_url"), apk.optLong("size"), digest, plain(o.optString("body")),
-                if (beta) version.substringAfterLast(" beta ").toLongOrNull() ?: return null else 0)
+                if (beta) version.substringAfterLast(" beta ").toLongOrNull() ?: return null else 0,
+                runCatching { java.time.Instant.parse(o.getString("published_at")).toEpochMilli() }.getOrDefault(0))
         }
 
         /** Release notes are Markdown on GitHub; in the app they're plain text with bullets. */
