@@ -6,6 +6,7 @@ import android.app.ActivityOptions
 import android.app.WallpaperManager
 import android.content.res.ColorStateList
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Handler
 import android.text.TextUtils
 import android.view.Gravity
@@ -92,7 +93,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         window.setDecorFitsSystemWindows(false)
         setContentView(R.layout.activity_home)
         // Newer Android sends Back here instead of as a key press.
-        onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { onBack() }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { onBack() }
 
         prefs = Prefs(this)
         palette = currentPalette()
@@ -186,6 +187,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         window.insetsController?.setSystemBarsAppearance(if (palette.wallpaperIsLight) light else 0, light)
         search.setTextColor(palette.onWall)
         search.setHintTextColor(palette.onWallSecondary)
+        Ui.cursor(search, palette.onWall)
         searchIcon.imageTintList = android.content.res.ColorStateList.valueOf(palette.onWallSecondary)
         searchClear.imageTintList = android.content.res.ColorStateList.valueOf(palette.onWallSecondary)
         searchClear.background = Ui.pressable(this, Ui.RADIUS_PILL, focusColor = palette.onWall)
@@ -1558,6 +1560,11 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (pinKey(event)) return true
+        // OK held on the page opened its menu; letting go of it is part of that hold.
+        if (homeScreen.heldOk && event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)) {
+            if (event.action == KeyEvent.ACTION_UP) homeScreen.heldOk = false
+            return true
+        }
         // Moving or resizing with the keypad: the keys are for that until it's done.
         if (homeScreen.takesKeys) return homeScreen.keyMove(event)
         keyMover?.let { return it.handle(event) }

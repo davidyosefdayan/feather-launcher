@@ -17,6 +17,7 @@ import org.json.JSONObject
  * Every part is optional, and shortcuts and filters are added to what's already there.
  * `--es wallpaper <path>` sets the wallpaper instead, for checking colors against many wallpapers;
  * `--es iconsheet 1` draws every app's icon normal and dark into one picture, for tuning dark icons.
+ * `--es widgetsheet 1` draws each of Feather's widgets at every size into widgets/ ([WidgetSheet]).
  */
 class SetupImport : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -79,6 +80,13 @@ class SetupImport : BroadcastReceiver() {
             return setResult(0, out.path, null)
         }
         // A sheet of every app's icon, normal and dark side by side, for checking dark icons.
+        if (intent.hasExtra("widgetsheet")) {
+            val done = goAsync()
+            return WidgetSheet.draw(context) { result ->
+                done.setResult(0, result, null)
+                done.finish()
+            }
+        }
         if (intent.hasExtra("iconsheet")) {
             val pm = context.packageManager
             val launcher = context.getSystemService(android.content.pm.LauncherApps::class.java)

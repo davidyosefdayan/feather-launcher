@@ -6,10 +6,13 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 
 /**
  * The launcher's accessibility service. It sees which app comes to the front however it was
@@ -139,6 +142,9 @@ class LauncherService : AccessibilityService() {
             run(short!!.action)
             return true
         }
+        // Held back, * or # gets typed for it afterwards; older Android can't do that in a
+        // password box, so there the key goes straight to the box.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && KeyShortcuts.typesInTextBoxes(code) && textBox()?.isPassword == true) return false
         owned += code
         // A second press while waiting for one is a double press.
         singles.remove(code)?.let { pending ->
@@ -212,8 +218,41 @@ class LauncherService : AccessibilityService() {
 
     /** Whether a text box is being typed in, in whichever app is in front. */
     private fun typing(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return textBox() != null
         if (inputMethod?.currentInputStarted != true) return false
         return (inputMethod?.currentInputEditorInfo?.inputType ?: 0) != android.text.InputType.TYPE_NULL
+    }
+
+    /**
+     * The text box in focus, for Android 11 and 12, where the service can't be told about typing
+     * (Android 13 added that). On those versions it may read the screen for this (xml/accessibility).
+     */
+    private fun textBox(): AccessibilityNodeInfo? =
+        runCatching { findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.getOrNull()?.takeIf { it.isEditable }
+
+    /** Types [text] at the cursor of the text box being edited. False when there's no box to type in. */
+    fun type(text: String): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val connection = inputMethod?.currentInputConnection ?: return false
+            connection.commitText(text, 1, null)
+            return true
+        }
+        // Older Android can only set a box's whole text: it gets the text put in at the cursor,
+        // and the cursor goes after it. A password box's text can't be read, so it isn't typed in.
+        val box = textBox()?.takeIf { !it.isPassword } ?: return false
+        val old = if (box.isShowingHintText) "" else box.text?.toString().orEmpty()
+        val selection = listOf(box.textSelectionStart, box.textSelectionEnd)
+        val start = selection.min().takeIf { it in 0..old.length } ?: old.length
+        val end = selection.max().takeIf { it in start..old.length } ?: start
+        val set = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, old.substring(0, start) + text + old.substring(end))
+        }
+        if (!box.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, set)) return false
+        box.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, start + text.length)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, start + text.length)
+        })
+        return true
     }
 
     // endregion

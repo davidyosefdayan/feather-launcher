@@ -17,10 +17,14 @@ enum class SecondCalendar(val label: String, private val icu: String?, private v
     INDIAN("Indian national", "indian"),
     ;
 
-    /** "25 Tishrei" or "14 Rabiʻ II" for [now]; null for [NONE]. [sunset] is today's, if known. */
-    fun format(now: Long, sunset: Long?): String? {
+    /**
+     * "25 Tishrei" or "14 Rabiʻ II" for [now]; null for [NONE]. [sunset] is today's, if known.
+     * [inHebrew] writes the Hebrew date in Hebrew: "כ״ה תשרי".
+     */
+    fun format(now: Long, sunset: Long?, inHebrew: Boolean = false): String? {
         val calendar = icu ?: return null
         val day = if (fromSunset && sunset != null && now >= sunset) now + DAY else now
+        if (this == HEBREW && inHebrew) return HebrewText.date(JewishCalendar.day(day, java.util.TimeZone.getDefault()))
         if (this == HEBREW) return Zmanim.hebrewDate(day, null)
         return SimpleDateFormat("d MMMM", ULocale("en@calendar=$calendar")).format(Date(day))
     }

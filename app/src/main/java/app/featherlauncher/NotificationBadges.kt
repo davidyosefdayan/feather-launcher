@@ -14,12 +14,6 @@ object NotificationBadges {
     @Volatile var counts: Map<String, Int> = emptyMap()
         private set
 
-    /** Missed calls and unread messages showing, for At a glance. */
-    @Volatile var missedCalls = 0
-        private set
-    @Volatile var messages = 0
-        private set
-
     /** Called on the main thread when any count changes. */
     var onChange: (() -> Unit)? = null
 
@@ -30,8 +24,6 @@ object NotificationBadges {
         val ranking = runCatching { service.currentRanking }.getOrNull()
         val r = NotificationListenerService.Ranking()
         val next = mutableMapOf<String, Int>()
-        var calls = 0
-        var texts = 0
         active.orEmpty().forEach { sbn ->
             val n = sbn.notification
             // Group summaries repeat their children; music, calls and downloads aren't news.
@@ -39,24 +31,12 @@ object NotificationBadges {
             // The app (or the person, in the app's notification settings) turned dots off for this kind.
             if (ranking != null && ranking.getRanking(sbn.key, r) && !r.canShowBadge()) return@forEach
             next[sbn.packageName] = (next[sbn.packageName] ?: 0) + n.number.coerceAtLeast(1)
-            when (n.category) {
-                Notification.CATEGORY_MISSED_CALL -> calls += n.number.coerceAtLeast(1)
-                Notification.CATEGORY_MESSAGE -> texts += n.number.coerceAtLeast(1)
-            }
         }
-        val changed = calls != missedCalls || texts != messages
-        missedCalls = calls
-        messages = texts
-        if (changed && next == counts) onChange?.invoke()
         set(next)
     }
 
     /** Access was taken away: nothing is known anymore. */
-    fun clear() {
-        missedCalls = 0
-        messages = 0
-        set(emptyMap())
-    }
+    fun clear() = set(emptyMap())
 
     private fun set(next: Map<String, Int>) {
         if (next == counts) return

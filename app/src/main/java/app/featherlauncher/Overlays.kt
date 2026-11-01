@@ -329,6 +329,7 @@ class Overlays(private val root: FrameLayout, private val palette: () -> Palette
             imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
             style(TextStyle.Body, p.text)
             setHintTextColor(p.textTertiary)
+            Ui.cursor(this, p.text)
             background = Ui.rounded(ctx, p.surfaceHigh, Ui.RADIUS_M)
             setPadding(dp(Ui.SPACE_L), 0, dp(Ui.SPACE_L), 0)
         }

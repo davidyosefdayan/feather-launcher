@@ -32,7 +32,6 @@ class CellLayout(context: Context, attrs: AttributeSet? = null) : ViewGroup(cont
     var iconOffset = 0f
 
     private val previewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x33FFFFFF }
-    private val previewRadius = Ui.dp(context, 18).toFloat()
 
     init {
         setWillNotDraw(false)
@@ -81,6 +80,8 @@ class CellLayout(context: Context, attrs: AttributeSet? = null) : ViewGroup(cont
     }
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        // A page's cell size, for drawing widgets at their real sizes from a computer (see [WidgetSheet]).
+        if (rows > 1 && cellWidth > 0 && cellHeight > 0) pageCell = cellWidth to cellHeight
         for (i in 0 until childCount) {
             val child = getChildAt(i)
             val rect = cellRect((child.layoutParams as LayoutParams).let { Rect(it.x, it.y, it.x + it.w, it.y + it.h) })
@@ -109,8 +110,10 @@ class CellLayout(context: Context, attrs: AttributeSet? = null) : ViewGroup(cont
                 previewPaint.color = if (dropPreviewGrow) 0x55FFFFFF else 0x33FFFFFF
                 canvas.drawRoundRect(cx - half, cy - half, cx + half, cy + half, radius, radius, previewPaint)
             } else {
-                val inset = Ui.dp(context, 4).toFloat()
-                canvas.drawRoundRect(RectF(r).apply { inset(inset, inset) }, previewRadius, previewRadius, previewPaint)
+                // Just where the widget's card will be: the same room around it, the same corners.
+                val inset = Ui.dp(context, CardWidget.GAP).toFloat()
+                val radius = Ui.dp(context, WidgetStyle.RADIUS).toFloat()
+                canvas.drawRoundRect(RectF(r).apply { inset(inset, inset) }, radius, radius, previewPaint)
             }
         }
         super.dispatchDraw(canvas)
@@ -123,5 +126,10 @@ class CellLayout(context: Context, attrs: AttributeSet? = null) : ViewGroup(cont
     fun place(view: View, x: Int, y: Int, w: Int, h: Int) {
         (view.parent as? ViewGroup)?.removeView(view)
         addView(view, LayoutParams(x, y, w, h))
+    }
+
+    companion object {
+        /** The width and height (px) of a page's cell, as last laid out. */
+        @Volatile var pageCell: Pair<Float, Float>? = null
     }
 }

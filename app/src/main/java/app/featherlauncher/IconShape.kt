@@ -51,16 +51,16 @@ enum class IconShape(val label: String) {
      * [look] DARK puts the icon's symbol on a deep charcoal plate; TINTED draws the symbol in
      * [tint] on that plate.
      */
-    fun render(drawable: Drawable, size: Int, look: IconLook = IconLook.NORMAL, tint: Int = 0): Bitmap {
+    fun render(drawable: Drawable, size: Int, look: IconLook = IconLook.NORMAL, tint: Int = 0, monochrome: Drawable? = null): Bitmap {
         // Dark and tinted icons are cut out at twice the size and scaled down, for smooth edges.
         if (look != IconLook.NORMAL) {
-            val big = renderAt(drawable, size * 2, look, tint)
+            val big = renderAt(drawable, size * 2, look, tint, monochrome)
             return Bitmap.createScaledBitmap(big, size, size, true).also { if (it !== big) big.recycle() }
         }
-        return renderAt(drawable, size, look, tint)
+        return renderAt(drawable, size, look, tint, monochrome)
     }
 
-    private fun renderAt(drawable: Drawable, size: Int, look: IconLook, tint: Int): Bitmap {
+    private fun renderAt(drawable: Drawable, size: Int, look: IconLook, tint: Int, monochrome: Drawable?): Bitmap {
         val layers = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(layers)
         val legacyWithOwnShape: Boolean
@@ -71,7 +71,7 @@ enum class IconShape(val label: String) {
                 drawable.background?.run { setBounds(-inset, -inset, size + inset, size + inset); draw(canvas) }
                 drawable.foreground?.run { setBounds(-inset, -inset, size + inset, size + inset); draw(canvas) }
             } else {
-                IconLooks.drawAdaptive(canvas, drawable, size, inset, look, tint)
+                IconLooks.drawAdaptive(canvas, drawable, size, inset, look, tint, monochrome)
             }
             legacyWithOwnShape = false
         } else {

@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">Feather Launcher</string>
-    <string name="accessibility_description">Lets Feather Launcher lock apps for app limits, however they\'re opened, and use the number keys for shortcuts before the phone\'s speed dial does.</string>
+    <string name="accessibility_description">Lets Feather Launcher lock apps for app limits, however they\'re opened, and use the number keys for shortcuts before the phone\'s speed dial does. It checks whether a text box is selected, so number keys still type there.</string>
 </resources>

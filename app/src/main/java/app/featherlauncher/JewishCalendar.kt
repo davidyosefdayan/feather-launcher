@@ -163,15 +163,8 @@ object JewishCalendar {
         return n.takeIf { it in 1..49 }
     }
 
-    /** "Day 23 of the Omer · 3 weeks and 2 days". */
-    fun omerText(n: Int): String {
-        val weeks = n / 7
-        val days = n % 7
-        if (weeks == 0) return "Day $n of the Omer"
-        fun plural(k: Int, word: String) = "$k $word${if (k == 1) "" else "s"}"
-        val parts = listOfNotNull(plural(weeks, "week"), days.takeIf { it > 0 }?.let { plural(it, "day") })
-        return "Day $n of the Omer · ${parts.joinToString(" and ")}"
-    }
+    /** "Day 23 of the Omer". */
+    fun omerText(n: Int) = "Day $n of the Omer"
 
     // endregion
 

@@ -67,6 +67,37 @@ class HomeScreen(
     private val drag = Drag()
     private var resize: ResizeFrame? = null
 
+    /**
+     * The page itself, for the keypad: up from the top row highlights the whole page, where OK
+     * (or holding it) opens the home screen's menu, as holding empty space does by touch. It's
+     * only focusable while it has the highlight, so Android's own arrow moves never land on it.
+     */
+    private val pageTarget by lazy { View(activity).apply {
+        background = Ui.focusHighlight(activity, PAGE_RADIUS)
+        contentDescription = "Home screen"
+        setOnFocusChangeListener { v, has -> if (!has) v.isFocusable = false }
+        setOnKeyListener { v, code, event ->
+            val ok = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
+            val held = event.action == KeyEvent.ACTION_DOWN && event.isLongPress
+            val tapped = event.action == KeyEvent.ACTION_UP && !event.isCanceled
+            if (ok && (held || tapped)) {
+                if (held) {
+                    v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    heldOk = true
+                }
+                val r = rectInRoot(this)
+                overlays.showMenu(null, host.homeMenuItems(), Rect(r.centerX(), r.centerY(), r.centerX(), r.centerY()))
+            }
+            ok
+        }
+    } }
+
+    /** OK was held on the page and opened its menu: letting go of it mustn't also pick an option. */
+    var heldOk = false
+
+    /** What's drawn around the page and the pages beside it: gone while the pages slide, back once they've stopped. */
+    private val pageRings = mutableListOf<View>()
+
     init {
         dock.cols = Workspace.DOCK_COLS
         dock.rows = 1
@@ -78,6 +109,42 @@ class HomeScreen(
         }
         if (workspace.isNew) setUpDefaults()
         bindAll()
+        root.addView(pageTarget, FrameLayout.LayoutParams(0, 0, Gravity.TOP or Gravity.START))
+        pageRings += pageTarget
+        pages.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> placePageTarget() }
+        pages.onSlide = ::fadeRings
+    }
+
+    /**
+     * The page's outline, for the keypad here and while dragging: around its grid, where each
+     * widget's own highlight is drawn too, so it sits as far outside the cards as theirs does.
+     */
+    private fun pageBounds(): Rect = rectInRoot(pages).let { box ->
+        Rect(box.left + dp(Ui.BAR_MARGIN), box.top + dp(Workspace.PAGE_TOP), box.right - dp(Ui.BAR_MARGIN), box.bottom)
+    }
+
+    private fun placePageTarget() {
+        val r = pageBounds()
+        val lp = pageTarget.layoutParams as FrameLayout.LayoutParams
+        if (lp.width == r.width() && lp.height == r.height() && lp.topMargin == r.top && lp.leftMargin == r.left) return
+        lp.width = r.width()
+        lp.height = r.height()
+        lp.topMargin = r.top
+        lp.leftMargin = r.left
+        pageTarget.layoutParams = lp
+    }
+
+    private fun fadeRings(progress: Float) {
+        for (ring in pageRings) {
+            ring.animate().cancel()
+            if (progress < 1f) ring.alpha = (1 - progress / RING_GONE_BY).coerceAtLeast(0f)
+            else ring.animate().alpha(1f).setDuration(160).start()
+        }
+    }
+
+    private fun focusPage() {
+        pageTarget.isFocusable = true
+        pageTarget.requestFocusFromTouch()
     }
 
     // region Layout
@@ -198,43 +265,36 @@ class HomeScreen(
         // Feather's widgets on cards; the clock and At a glance below.
         HomeItem.Type.CLOCK -> CardWidget.create(activity, item)?.apply {
             when (this) {
-                is AgendaWidget -> {
+                is CalendarWidget -> {
                     onEvent = { e -> host.startSafely(Intent(Intent.ACTION_VIEW, ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, e.id))) }
                     onCalendar = {
                         val uri = CalendarContract.CONTENT_URI.buildUpon().appendPath("time")
                         ContentUris.appendId(uri, System.currentTimeMillis())
                         host.startSafely(Intent(Intent.ACTION_VIEW, uri.build()))
                     }
-                    onAllow = {
+                }
+                is ZmanimWidget -> onOpen = { place -> ZmanimSheet.show(activity, palette(), overlays, place) }
+                is UpNextWidget -> {
+                    solid = prefs.widgetSolid(item.id)
+                    onTap = ::openGlance
+                    onLocation = {
                         activity.startActivity(Intent(activity, SettingsActivity::class.java)
                             .putExtra(SettingsActivity.EXTRA_PAGE, SettingsActivity.Page.CALENDAR.name))
                     }
                 }
-                is ZmanimWidget -> onOpen = { place -> ZmanimSheet.show(activity, palette(), overlays, place) }
             }
             setOnLongClickListener { onItemLongPress(item, it); true }
         } ?: ClockWidget(activity, item).apply {
-            apply(prefs.clockOptions(item.id))
-            foreground = Ui.focusRing(activity, Ui.RADIUS_L, 0xFFFFFFFF.toInt())
+            setSolid(prefs.widgetSolid(item.id))
+            // The keypad highlight follows the card's corner, as it does around the other widgets.
+            foreground = Ui.focusHighlight(activity, WidgetStyle.RADIUS + CardWidget.GAP)
             setOnClickListener { host.startSafely(Intent(AlarmClock.ACTION_SHOW_ALARMS)) }
             dateView.setOnClickListener {
                 val uri = CalendarContract.CONTENT_URI.buildUpon().appendPath("time")
                 ContentUris.appendId(uri, System.currentTimeMillis())
                 host.startSafely(Intent(Intent.ACTION_VIEW, uri.build()))
             }
-            onTap = { glanceItem, place ->
-                when (glanceItem.tap) {
-                    Glance.Tap.ZMANIM -> place?.let { ZmanimSheet.show(activity, palette(), overlays, it) }
-                    Glance.Tap.EVENT -> glanceItem.event?.let { e ->
-                        host.startSafely(Intent(Intent.ACTION_VIEW, ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, e.id)))
-                    }
-                    Glance.Tap.ALARMS -> host.startSafely(Intent(AlarmClock.ACTION_SHOW_ALARMS))
-                    Glance.Tap.CALLS -> host.startSafely(Intent(Intent.ACTION_VIEW).setType(android.provider.CallLog.Calls.CONTENT_TYPE))
-                    // The phone's messages app.
-                    Glance.Tap.MESSAGES -> android.provider.Telephony.Sms.getDefaultSmsPackage(activity)
-                        ?.let { activity.packageManager.getLaunchIntentForPackage(it) }?.let(host::startSafely)
-                }
-            }
+            onTap = ::openGlance
             setOnLongClickListener { onItemLongPress(item, it); true }
             dateView.setOnLongClickListener { onItemLongPress(item, this); true }
         }
@@ -253,6 +313,17 @@ class HomeScreen(
                 repo.apps.firstOrNull { app -> app.packageName == pkg }?.let { app -> host.launch(app, it) }
                     ?: activity.packageManager.getLaunchIntentForPackage(pkg)?.let(host::startSafely)
             }
+        }
+    }
+
+    /** Tapping something coming up, on the clock or Up next: the day's zmanim, the event, the alarms. */
+    private fun openGlance(item: Glance.Item, place: ClockInfo.Place?) {
+        when (item.tap) {
+            Glance.Tap.ZMANIM -> place?.let { ZmanimSheet.show(activity, palette(), overlays, it) }
+            Glance.Tap.EVENT -> item.event?.let { e ->
+                host.startSafely(Intent(Intent.ACTION_VIEW, ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, e.id)))
+            }
+            Glance.Tap.ALARMS -> host.startSafely(Intent(AlarmClock.ACTION_SHOW_ALARMS))
         }
     }
 
@@ -351,9 +422,6 @@ class HomeScreen(
     /** Opens the item's menu (also used by the keypad Menu key). */
     fun showItemMenu(item: HomeItem, view: View) {
         val anchor = rectInRoot(view)
-        // With the keypad something on the home screen is always highlighted, so the Menu key
-        // never reaches the home screen's own menu; its options come last in every item's instead.
-        val home = if (view.isInTouchMode) emptyList() else listOf(host.homeMenuItems())
         when (item.type) {
             HomeItem.Type.APP -> {
                 val entry = repo.find(item.ref) ?: return
@@ -367,28 +435,28 @@ class HomeScreen(
                             MenuItem("Rename", R.drawable.ic_edit) { rename(item, entry.label) },
                             MenuItem("Remove", R.drawable.ic_close, danger = true) { remove(item) },
                         ),
-                    ) + home,
+                    ),
                     anchor, repo.icon(entry),
                 ) { host.showAppInfo(entry) }
             }
-            HomeItem.Type.FOLDER -> overlays.showMenu(item.label ?: FOLDER_NAME, listOf(listOf(
+            HomeItem.Type.FOLDER -> overlays.showMenu(item.label ?: FOLDER_NAME, listOf(
                 MenuItem("Move", R.drawable.ic_move) { startKeyMove(item) },
                 MenuItem("Rename", R.drawable.ic_edit) { rename(item, FOLDER_NAME) },
                 MenuItem("Remove", R.drawable.ic_close, danger = true) { remove(item) },
-            )) + home, anchor, folderIcon(item))
-            HomeItem.Type.CLOCK -> overlays.showMenu(clockName(item), listOf(listOfNotNull(
-                featherSettings(item),
+            ), anchor, folderIcon(item))
+            HomeItem.Type.CLOCK -> overlays.showMenu(clockName(item), listOfNotNull(
+                widgetSettings(item),
                 MenuItem("Move", R.drawable.ic_move) { startKeyMove(item) },
                 MenuItem("Resize", R.drawable.ic_height) { startResize(item) },
                 MenuItem("Remove", R.drawable.ic_close, danger = true) { remove(item) },
-            )) + home, anchor)
+            ), anchor)
             HomeItem.Type.WIDGET -> {
                 val info = widgets.info(item.ref.toInt())
                 val label = info?.loadLabel(activity.packageManager) ?: "Widget"
-                val items = mutableListOf(MenuItem("Move", R.drawable.ic_move) { startKeyMove(item) })
+                val items = listOfNotNull(widgetSettings(item), MenuItem("Move", R.drawable.ic_move) { startKeyMove(item) }).toMutableList()
                 if (info != null && info.resizeMode != 0) items += MenuItem("Resize", R.drawable.ic_height) { startResize(item) }
                 items += MenuItem("Remove", R.drawable.ic_close, danger = true) { remove(item) }
-                overlays.showMenu(label, listOf(items) + home, anchor, info?.provider?.packageName?.let { pkg ->
+                overlays.showMenu(label, items, anchor, info?.provider?.packageName?.let { pkg ->
                     repo.apps.firstOrNull { it.packageName == pkg }?.let(repo::icon)
                 })
             }
@@ -417,6 +485,7 @@ class HomeScreen(
             style(TextStyle.Body, p.text)
             setHintTextColor(p.textTertiary)
             hint = defaultName
+            Ui.cursor(this, p.text)
             background = Ui.rounded(activity, p.surfaceHigh, Ui.RADIUS_M)
             setPadding(dp(Ui.SPACE_L), 0, dp(Ui.SPACE_L), 0)
         }
@@ -623,53 +692,42 @@ class HomeScreen(
 
     private fun clockName(item: HomeItem) = FeatherKind.of(item).label
 
-    /** What a Feather widget's settings are, if it has any. */
-    private fun featherSettings(item: HomeItem): MenuItem? = when (FeatherKind.of(item)) {
-        FeatherKind.CLOCK -> MenuItem("${clockName(item)} settings", R.drawable.ic_settings) { clockSettings(item) }
-        else -> null
+    /**
+     * Widget settings, the same for every widget that has any: another app's own settings screen
+     * (if it can be opened again after adding), or a Feather widget's settings sheet.
+     */
+    private fun widgetSettings(item: HomeItem): MenuItem? {
+        val open: () -> Unit = when (item.type) {
+            HomeItem.Type.WIDGET -> if (widgets.canReconfigure(item.ref.toInt())) ({ widgets.reconfigure(item.ref.toInt()) }) else return null
+            HomeItem.Type.CLOCK -> when (FeatherKind.of(item)) {
+                FeatherKind.CLOCK, FeatherKind.UP_NEXT -> ({ featherSettings(item) })
+                else -> return null
+            }
+            else -> return null
+        }
+        return MenuItem("Widget settings", R.drawable.ic_settings) { open() }
     }
 
-    private fun clockSettings(item: HomeItem) {
+    /** A Feather widget's settings: for now its style, Solid on a card or Transparent on the wallpaper, as Android's own Clock offers. */
+    private fun featherSettings(item: HomeItem) {
         val p = palette()
-        val options = prefs.clockOptions(item.id)
         val column = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, 0, 0, dp(Ui.SPACE_L))
         }
-        fun update(next: ClockOptions) {
-            prefs.setClockOptions(item.id, next)
-            (views[item.id] as? ClockWidget)?.apply(next)
-            clockSettings(item)
+        fun build() {
+            column.removeAllViews()
+            val solid = prefs.widgetSolid(item.id)
+            column.addView(Components.sectionLabel(activity, p, "Style"))
+            column.addView(Components.segmented(activity, p, listOf("Solid", "Transparent"), if (solid) 0 else 1) {
+                prefs.setWidgetSolid(item.id, it == 0)
+                (views[item.id] as? ClockWidget)?.setSolid(it == 0)
+                (views[item.id] as? UpNextWidget)?.solid = it == 0
+                build()
+            })
         }
-        column.addView(sectionLabel("Size", p))
-        column.addView(segmented(p, ClockOptions.Size.entries.map { it.label }, options.size.ordinal) {
-            update(options.copy(size = ClockOptions.Size.entries[it]))
-        })
-        column.addView(sectionLabel("Alignment", p))
-        column.addView(segmented(p, listOf("Center", "Left"), if (options.alignStart) 1 else 0) {
-            update(options.copy(alignStart = it == 1))
-        })
-        column.addView(sectionLabel("Date", p))
-        column.addView(segmented(p, listOf("Show", "Hide"), if (options.showDate) 0 else 1) {
-            update(options.copy(showDate = it == 0))
-        })
-        column.addView(sectionLabel("Time", p))
-        column.addView(segmented(p, listOf("Show", "Hide"), if (options.showTime) 0 else 1) {
-            update(options.copy(showTime = it == 0))
-        })
-        // What the clock shows besides the time is the same for every clock, so it's in Settings.
-        column.addView(android.view.View(activity), LinearLayout.LayoutParams(1, dp(Ui.SPACE_M)))
-        column.addView(Components.row(activity, p, R.drawable.ic_calendar, "Calendar and times", chevron = true) {
-            overlays.dismiss()
-            activity.startActivity(Intent(activity, SettingsActivity::class.java).putExtra(SettingsActivity.EXTRA_PAGE, SettingsActivity.Page.CALENDAR.name))
-        })
-        overlays.showSheet(clockName(item), column)
-    }
-
-    private fun sectionLabel(text: String, p: Palette) = TextView(activity).apply {
-        this.text = text
-        style(TextStyle.Section, p.textSecondary)
-        setPadding(dp(Ui.SPACE_XL), dp(Ui.SPACE_L), dp(Ui.SPACE_XL), dp(Ui.SPACE_S))
+        build()
+        overlays.showSheet("${clockName(item)} settings", column)
     }
 
     // endregion
@@ -1053,17 +1111,18 @@ class HomeScreen(
             val box = rectInRoot(pages)
             val dockBox = rectInRoot(dock)
             val gap = dp(EDGE_GAP)
-            val top = box.top + gap
-            // Just the page: the dots under it aren't part of it.
-            val height = box.bottom - top
-            fun zone(lp: FrameLayout.LayoutParams) = DropZone(activity, 0, outline, Ui.RADIUS_BAR).also { root.addView(it, lp) }
+            // Just the page: the dots under it aren't part of it. The same outline as the keypad's.
+            val page = pageBounds()
+            val top = page.top
+            val height = page.height()
+            fun zone(lp: FrameLayout.LayoutParams, radius: Int = Ui.RADIUS_BAR) = DropZone(activity, 0, outline, radius).also { root.addView(it, lp) }
 
-            pageOutline = zone(FrameLayout.LayoutParams(root.width - 2 * dp(Ui.BAR_MARGIN), height, Gravity.TOP or Gravity.START).apply {
+            pageOutline = zone(FrameLayout.LayoutParams(page.width(), height, Gravity.TOP or Gravity.START).apply {
                 topMargin = top
-                leftMargin = dp(Ui.BAR_MARGIN)
-            })
+                leftMargin = page.left
+            }, PAGE_RADIUS)
             // Slivers: the neighbouring page starts just past the edge of this one.
-            val sliver = dp(Ui.BAR_MARGIN) - gap
+            val sliver = page.left - gap
             fun side(gravity: Int) = zone(FrameLayout.LayoutParams(dp(80), height, gravity or Gravity.TOP).apply {
                 topMargin = top
                 if (gravity == Gravity.END) rightMargin = sliver - dp(80) else leftMargin = sliver - dp(80)
@@ -1083,6 +1142,7 @@ class HomeScreen(
             }
             leftZone = side(Gravity.START).apply { onTrigger = { flipPage(-1) } }
             rightZone = side(Gravity.END).apply { onTrigger = { flipPage(1) } }
+            pageRings += listOfNotNull(pageOutline, leftZone, rightZone)
             updateLeftZone()
             if (fromDrawer) {
                 bottomZone = zone(FrameLayout.LayoutParams(root.width - 2 * dp(Ui.BAR_MARGIN), dp(80), Gravity.TOP or Gravity.START).apply {
@@ -1108,6 +1168,7 @@ class HomeScreen(
         }
 
         private fun hideEdgeZones() {
+            pageRings -= listOfNotNull(pageOutline, leftZone, rightZone).toSet()
             listOfNotNull(leftZone, rightZone, bottomZone, pageOutline).forEach { it.dismiss() }
             dockOutline?.let { v -> v.animate().alpha(0f).setDuration(120).withEndAction { root.removeView(v) }.start() }
             dockOutline = null
@@ -1341,14 +1402,8 @@ class HomeScreen(
             }
             clearReorder(commit = false)
             setTarget(null)
-            // The page outline goes with the old page: it fades out as the pages slide, then
-            // fades back in around the new one.
-            listOfNotNull(pageOutline, leftZone, rightZone).forEach { z ->
-                z.animate().cancel()
-                z.animate().alpha(0f).setDuration(120).withEndAction {
-                    z.animate().alpha(1f).setStartDelay(160).setDuration(160).start()
-                }.start()
-            }
+            // The page outline goes with the old page as the pages slide, and comes back around
+            // the new one (see fadeRings).
             pages.snapTo(next)
             updateLeftZone()
             root.postDelayed({ if (active && keyCell == null) move(lastX, lastY) }, 300)
@@ -1435,7 +1490,7 @@ class HomeScreen(
     fun startResize(item: HomeItem) {
         finishResize()
         val view = views[item.id] ?: return
-        val min = if (item.type == HomeItem.Type.WIDGET) widgets.minSpan(item.ref.toInt()) else 2 to 1
+        val min = if (item.type == HomeItem.Type.WIDGET) widgets.minSpan(item.ref.toInt()) else FeatherKind.of(item).let { it.minW to it.minH }
         val frame = ResizeFrame(item, view, min)
         root.addView(frame, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         frame.toolbar = widgetToolbar(item).also {
@@ -1462,10 +1517,7 @@ class HomeScreen(
         val p = palette()
         val actions = mutableListOf<MenuItem>()
         when (item.type) {
-            HomeItem.Type.CLOCK -> featherSettings(item)?.let { actions += it }
-            HomeItem.Type.WIDGET -> if (widgets.canReconfigure(item.ref.toInt())) {
-                actions += MenuItem("Settings", R.drawable.ic_settings) { widgets.reconfigure(item.ref.toInt()) }
-            }
+            HomeItem.Type.CLOCK, HomeItem.Type.WIDGET -> widgetSettings(item)?.let { actions += it }
             HomeItem.Type.APP, HomeItem.Type.FOLDER -> Unit
         }
         actions += MenuItem("Remove", R.drawable.ic_close, danger = true) { remove(item) }
@@ -1530,7 +1582,7 @@ class HomeScreen(
             val b = bounds()
             // Around a card, its curve runs parallel to the card's, the frame's distance out.
             val radius = when (view) {
-                is CardWidget -> dp(WidgetStyle.RADIUS + CardWidget.GAP - 2).toFloat()
+                is CardWidget, is ClockWidget -> dp(WidgetStyle.RADIUS + CardWidget.GAP - 2).toFloat()
                 is WidgetView -> (view.corner + view.cornerInset - dp(2)).coerceAtLeast(dp(18).toFloat())
                 else -> dp(18).toFloat()
             }
@@ -1632,8 +1684,8 @@ class HomeScreen(
     private fun snapshot(view: View): Bitmap {
         val bitmap = Bitmap.createBitmap(view.width.coerceAtLeast(1), view.height.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
         // Draw without the keypad highlight or press scale.
-        // A card widget's background is the card itself; others' is just the keypad highlight.
-        if (view is CardWidget) {
+        // A Feather widget's background is its card; others' is just the keypad highlight.
+        if (view is CardWidget || view is ClockWidget) {
             view.draw(Canvas(bitmap))
             return bitmap
         }
@@ -1672,8 +1724,20 @@ class HomeScreen(
                 return true
             }
         }
+        // On the page itself: down to its first item, sideways to the page beside it.
+        if (activity.currentFocus === pageTarget && pageTarget.isFocused) {
+            when (direction) {
+                View.FOCUS_DOWN -> (itemsOn(pages.currentPage).ifEmpty { itemsOn(Workspace.DOCK) })
+                    .minByOrNull { rectInRoot(it).let { r -> r.top * 10_000 + r.left } }?.requestFocusFromTouch()
+                View.FOCUS_LEFT, View.FOCUS_RIGHT -> flipPage(if (direction == View.FOCUS_RIGHT) 1 else -1)
+            }
+            return true
+        }
         val here = itemsOn(pages.currentPage) + itemsOn(Workspace.DOCK)
-        if (here.isEmpty()) return false
+        if (here.isEmpty()) {
+            focusPage()
+            return true
+        }
         // Resting on the invisible spot (or nowhere) counts as no highlight yet: start at the top.
         val from = activity.currentFocus?.takeIf { it in here && !it.isInTouchMode && it.isFocused }
         if (from == null) {
@@ -1689,6 +1753,8 @@ class HomeScreen(
             best.requestFocusFromTouch()
             return true
         }
+        // Up from the top row: the page itself.
+        if (direction == View.FOCUS_UP) focusPage()
         if (vertical) return true
         // Off the edge sideways: the next page, landing on its item nearest in height.
         val next = pages.currentPage + if (direction == View.FOCUS_RIGHT) 1 else -1
@@ -1857,25 +1923,6 @@ class HomeScreen(
         return Rect(location[0], location[1], location[0] + view.width, location[1] + view.height)
     }
 
-    private fun segmented(p: Palette, options: List<String>, selected: Int, onPick: (Int) -> Unit): View =
-        LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            // Buttons have 4dp side margins; this puts their outer edges in line with the headings.
-            setPadding(dp(Ui.SPACE_XL - 4), 0, dp(Ui.SPACE_XL - 4), 0)
-            options.forEachIndexed { i, label ->
-                addView(TextView(activity).apply {
-                    text = label
-                    gravity = Gravity.CENTER
-                    style(TextStyle.Label, if (i == selected) p.onAccent else p.text)
-                    setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f)
-                    background = Ui.rounded(activity, if (i == selected) p.accent else p.surfaceHigh, Ui.RADIUS_PILL)
-                    foreground = Ui.pressable(activity, Ui.RADIUS_PILL)
-                    isFocusable = true
-                    setOnClickListener { onPick(i) }
-                }, LinearLayout.LayoutParams(0, dp(42), 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
-            }
-        }
-
     private fun dp(value: Int) = Ui.dp(activity, value)
 
     companion object {
@@ -1884,6 +1931,10 @@ class HomeScreen(
         /** Thickness of the targets along the edges while dragging. */
         /** Space between the page outline and the dock (and around the slivers). */
         private const val EDGE_GAP = Workspace.PAGE_TOP
+        /** The page outline's corners: a widget's own highlight's, as the outline is as far outside the cards. */
+        private const val PAGE_RADIUS = WidgetStyle.RADIUS + CardWidget.GAP
+        /** How far into a slide the page outlines have faded out. */
+        private const val RING_GONE_BY = 0.3f
         /** How close to a side edge (dp) the finger counts as over that side's sliver. */
         private const val EDGE_HIT = 28
         private const val FOLDER_NAME = "Folder"

@@ -137,11 +137,12 @@ class SmartSearch(private val context: Context, private val start: (Intent) -> U
 
     // region Media
 
-    val mediaPermissions = arrayOf(
+    /** Android 13 split reading files into photos, videos and music; before that it was one permission. */
+    val mediaPermissions = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) arrayOf(
         android.Manifest.permission.READ_MEDIA_IMAGES,
         android.Manifest.permission.READ_MEDIA_VIDEO,
         android.Manifest.permission.READ_MEDIA_AUDIO,
-    )
+    ) else arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
 
     val mediaAllowed get() = mediaPermissions.any { context.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
 

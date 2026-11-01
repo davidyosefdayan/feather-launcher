@@ -104,21 +104,10 @@ class Prefs(context: Context) {
         sp.edit().putString("widgets", specs.joinToString(",") { "${it.id}:${it.heightDp}" }).apply()
     }
 
-    fun clockOptions(id: Long) = ClockOptions(
-        runCatching { ClockOptions.Size.valueOf(sp.getString("clock_size_$id", null)!!) }.getOrDefault(ClockOptions.Size.LARGE),
-        sp.getBoolean("clock_start_$id", false),
-        sp.getBoolean("clock_date_$id", true),
-        sp.getBoolean("clock_time_$id", true),
-    )
+    /** The clock or Up next [id] sits on a card (Solid, as it starts out) rather than straight on the wallpaper (Transparent). */
+    fun widgetSolid(id: Long) = sp.getBoolean("clock_solid_$id", true)
 
-    fun setClockOptions(id: Long, options: ClockOptions) {
-        sp.edit()
-            .putString("clock_size_$id", options.size.name)
-            .putBoolean("clock_start_$id", options.alignStart)
-            .putBoolean("clock_date_$id", options.showDate)
-            .putBoolean("clock_time_$id", options.showTime)
-            .apply()
-    }
+    fun setWidgetSolid(id: Long, solid: Boolean) = sp.edit().putBoolean("clock_solid_$id", solid).apply()
 
     /** The welcome has been shown (or the older first-run sheet was, for people updating). */
     var onboarded: Boolean
@@ -141,6 +130,11 @@ class Prefs(context: Context) {
     var secondCalendar: SecondCalendar
         get() = runCatching { SecondCalendar.valueOf(sp.getString("second_calendar", null)!!) }.getOrDefault(SecondCalendar.HEBREW)
         set(value) = sp.edit().putString("second_calendar", value.name).apply()
+
+    /** The Hebrew date, parsha, holidays, Omer and daf in Hebrew ("י׳ חשון"), not English ("10 Cheshvan"). */
+    var hebrewInHebrew: Boolean
+        get() = sp.getBoolean("hebrew_in_hebrew", false)
+        set(value) = sp.edit().putBoolean("hebrew_in_hebrew", value).apply()
 
     /** Jewish zmanim (true), or just sunrise and sunset. */
     var dailyZmanim: Boolean
@@ -208,10 +202,6 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("glance_alarm", true)
         set(value) = sp.edit().putBoolean("glance_alarm", value).apply()
 
-    var glanceMissed: Boolean
-        get() = sp.getBoolean("glance_missed", true)
-        set(value) = sp.edit().putBoolean("glance_missed", value).apply()
-
     var clockZman: Boolean
         get() = sp.getBoolean("clock_zman", true)
         set(value) = sp.edit().putBoolean("clock_zman", value).apply()
@@ -240,6 +230,15 @@ class Prefs(context: Context) {
         set(value) {
             if (value == null) sp.edit().remove("last_lat").remove("last_lon").apply()
             else sp.edit().putFloat("last_lat", value.first.toFloat()).putFloat("last_lon", value.second.toFloat()).apply()
+        }
+
+    /** The name of where the phone last was, and the position it was looked up for. */
+    var lastPlaceName: Pair<String, Pair<Double, Double>>?
+        get() = sp.getString("place_name", null)?.let { it to (sp.getFloat("place_name_lat", 0f).toDouble() to sp.getFloat("place_name_lon", 0f).toDouble()) }
+        set(value) {
+            if (value == null) sp.edit().remove("place_name").remove("place_name_lat").remove("place_name_lon").apply()
+            else sp.edit().putString("place_name", value.first)
+                .putFloat("place_name_lat", value.second.first.toFloat()).putFloat("place_name_lon", value.second.second.toFloat()).apply()
         }
 
     fun launchCount(key: String): Int = launches.getInt(key, 0)

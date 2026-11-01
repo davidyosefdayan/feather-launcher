@@ -1,5 +1,6 @@
 package app.featherlauncher
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
@@ -15,6 +16,8 @@ import android.widget.TextView
  * the app's theme, with large rounded corners; and on the wallpaper itself, white type with a
  * soft shadow and nothing behind it, like the Pixel's At a glance.
  */
+// Android 12's color ids are also how Android 11 asks for its own version of them (see system).
+@SuppressLint("InlinedApi")
 object WidgetStyle {
     const val WHITE = 0xFFFFFFFF.toInt()
     const val SOFT_WHITE = 0xD9FFFFFF.toInt()
@@ -28,8 +31,13 @@ object WidgetStyle {
 
     private fun dark() = palette()?.dark ?: true
 
-    private fun system(dark: Int, light: Int, fallback: Int): Int =
-        context?.getColor(if (dark()) dark else light) ?: fallback
+    private fun system(dark: Int, light: Int, fallback: Int): Int {
+        val ctx = context ?: return fallback
+        val id = if (dark()) dark else light
+        // Android 11 doesn't have these colors, so they're made the same way from the wallpaper.
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) return MaterialYou.color(ctx, id, palette()) ?: fallback
+        return ctx.getColor(id)
+    }
 
     /** A card's background, its text, and its quieter text. */
     fun card() = system(android.R.color.system_accent2_800, android.R.color.system_accent2_50, 0xFF2B2D31.toInt())
@@ -49,6 +57,7 @@ object WidgetStyle {
     val title: Typeface = Typeface.create(Typeface.DEFAULT, 600, false)
     val body: Typeface = Typeface.create(Typeface.DEFAULT, 400, false)
     val label: Typeface = Typeface.create(Typeface.DEFAULT, 500, false)
+    val bold: Typeface = Typeface.create(Typeface.DEFAULT, 700, false)
 
     /** White text with the soft shadow that keeps it readable on any wallpaper. */
     fun text(ctx: Context, sp: Float, face: Typeface, color: Int = WHITE) = TextView(ctx).apply {
@@ -150,11 +159,11 @@ class FitRow(context: Context) : ViewGroup(context) {
 /**
  * A column that leaves out its last rows when they don't fit, instead of letting them spill
  * over or get cut in half: on a small screen a card shows fewer rows, not broken ones. A row
- * marked with [dropFirst] goes before the others.
+ * marked with [dropFirst] goes before the others; the first row only goes if it's marked so.
  */
 open class FitColumn(context: Context) : android.widget.LinearLayout(context) {
     companion object {
-        /** Marks [view] to be left out before rows with a lower [priority] (0 by default). */
+        /** Marks [view] to be left out before rows with a lower [priority] (0 by default); below 0, it's never left out. */
         fun dropFirst(view: View, priority: Int = 1) = view.apply { setTag(R.id.fit_priority, priority) }
     }
 
@@ -192,7 +201,8 @@ open class FitColumn(context: Context) : android.widget.LinearLayout(context) {
         val width = MeasureSpec.makeMeasureSpec(measuredWidth - paddingLeft - paddingRight, MeasureSpec.AT_MOST)
         while (used(width) > room) {
             // The row with the highest [dropFirst] priority goes; among equals, the last.
-            val last = (childCount - 1 downTo 1).map(::getChildAt).filter { it.visibility == View.VISIBLE }
+            val last = (childCount - 1 downTo 0).map(::getChildAt)
+                .filter { it.visibility == View.VISIBLE && (it.getTag(R.id.fit_priority) as? Int ?: if (it === getChildAt(0)) -1 else 0) >= 0 }
                 .maxByOrNull { it.getTag(R.id.fit_priority) as? Int ?: 0 } ?: break
             last.visibility = View.GONE
             last.setTag(R.id.fit_hidden, true)
@@ -206,5 +216,33 @@ open class FitColumn(context: Context) : android.widget.LinearLayout(context) {
         val lp = it.layoutParams as MarginLayoutParams
         it.measure(width, MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
         it.measuredHeight + lp.topMargin + lp.bottomMargin
+    }
+}
+
+/**
+ * Text that says as much as fits on one line: the first of [options] that fits its width
+ * ("in 25 min · 1:00 – 2:00 PM", then "in 25 min · 1:00 PM", then "1:00 PM"), the last cut short
+ * if even that doesn't.
+ */
+class FitText(context: Context) : TextView(context) {
+    var options: List<String> = emptyList()
+        set(value) {
+            field = value
+            text = value.firstOrNull()
+            requestLayout()
+        }
+
+    init {
+        maxLines = 1
+        ellipsize = android.text.TextUtils.TruncateAt.END
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        if (options.size > 1 && MeasureSpec.getMode(widthMeasureSpec) != MeasureSpec.UNSPECIFIED) {
+            val room = MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight
+            val pick = options.firstOrNull { paint.measureText(it) <= room } ?: options.last()
+            if (text.toString() != pick) text = pick
+        }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
 }

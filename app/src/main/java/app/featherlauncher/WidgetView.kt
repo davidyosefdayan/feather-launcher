@@ -36,8 +36,8 @@ class WidgetView(context: Context) : AppWidgetHostView(context) {
     }
 
     /**
-     * Every widget gets rounded corners, square ones too (as on the Pixel launcher), at least as
-     * round as Feather's cards: some phones set Android's own widget corner to almost nothing.
+     * Every widget gets rounded corners, square ones too (as on the Pixel launcher), exactly as
+     * round as Feather's own ([WidgetStyle.RADIUS]), whatever the phone sets Android's to.
      * A widget that marks its background is rounded around that, the way Android does it.
      */
     private val rounded = object : ViewOutlineProvider() {
@@ -48,7 +48,7 @@ class WidgetView(context: Context) : AppWidgetHostView(context) {
                 box.set(0, 0, bg.width, bg.height)
                 view.offsetDescendantRectToMyCoords(bg, box)
             }
-            val radius = maxOf(resources.getDimension(android.R.dimen.system_app_widget_background_radius), WidgetStyle.RADIUS * resources.displayMetrics.density)
+            val radius = WidgetStyle.RADIUS * resources.displayMetrics.density
             corner = minOf(radius, minOf(box.width(), box.height()) / 2f)
             cornerBox.set(box)
             cornerBox.offset(view.left, view.top)
@@ -69,6 +69,15 @@ class WidgetView(context: Context) : AppWidgetHostView(context) {
     val cornerInset get() = cornerBox.left
     private var ringDp = 0
 
+    /**
+     * Android pads a widget 8dp on every side; it gets the same room as Feather's own cards
+     * ([CardWidget.GAP]) instead, so widgets side by side line up and their outlines match.
+     */
+    override fun setPadding(left: Int, top: Int, right: Int, bottom: Int) {
+        val gap = Ui.dp(context, CardWidget.GAP)
+        super.setPadding(gap, gap, gap, gap)
+    }
+
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         super.onLayout(changed, left, top, right, bottom)
         // Android sets its own corners while laying a widget out (and none on widgets that don't
@@ -87,7 +96,14 @@ class WidgetView(context: Context) : AppWidgetHostView(context) {
         // Tell the widget its real size so it can pick a layout that fits.
         if (w > 0 && h > 0) {
             val density = resources.displayMetrics.density
-            updateAppWidgetSize(android.os.Bundle(), listOf(android.util.SizeF(w / density, h / density)))
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                updateAppWidgetSize(android.os.Bundle(), listOf(android.util.SizeF(w / density, h / density)))
+            } else {
+                // Android 11 widgets take a range of sizes; this one size is both ends of it.
+                val (wDp, hDp) = (w / density).toInt() to (h / density).toInt()
+                @Suppress("DEPRECATION")
+                updateAppWidgetSize(android.os.Bundle(), wDp, hDp, wDp, hDp)
+            }
         }
     }
 

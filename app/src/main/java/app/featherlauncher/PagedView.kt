@@ -16,6 +16,9 @@ class PagedView(context: Context, attrs: AttributeSet?) : ViewGroup(context, att
     var currentPage = 0
         private set
     var onPageChanged: ((Int) -> Unit)? = null
+    /** How far a slide to a page has come, from 0 to 1 once it's there. */
+    var onSlide: ((Float) -> Unit)? = null
+    private var slideFrom = 0
     /** Long press on empty space (no app or widget under the finger), in window coordinates. */
     var onEmptyLongPress: ((x: Float, y: Float) -> Unit)? = null
 
@@ -57,6 +60,7 @@ class PagedView(context: Context, attrs: AttributeSet?) : ViewGroup(context, att
         val changed = target != currentPage
         currentPage = target
         if (animate && width > 0) {
+            slideFrom = scrollX
             scroller.startScroll(scrollX, 0, target * width - scrollX, 0, 280)
             postInvalidateOnAnimation()
         } else {
@@ -79,6 +83,8 @@ class PagedView(context: Context, attrs: AttributeSet?) : ViewGroup(context, att
         if (scroller.computeScrollOffset()) {
             scrollTo(scroller.currX, 0)
             postInvalidateOnAnimation()
+            val distance = scroller.finalX - slideFrom
+            onSlide?.invoke(if (scroller.isFinished || distance == 0) 1f else ((scrollX - slideFrom).toFloat() / distance).coerceIn(0f, 1f))
         }
     }
 
@@ -88,7 +94,10 @@ class PagedView(context: Context, attrs: AttributeSet?) : ViewGroup(context, att
             MotionEvent.ACTION_DOWN -> {
                 downX = ev.x; downY = ev.y; lastX = ev.x
                 dragging = !scroller.isFinished
-                if (dragging) scroller.forceFinished(true)
+                if (dragging) {
+                    scroller.forceFinished(true)
+                    onSlide?.invoke(1f)
+                }
             }
             MotionEvent.ACTION_MOVE -> {
                 val dx = abs(ev.x - downX)

@@ -39,6 +39,23 @@ object Ui {
 
     fun dp(context: Context, value: Number): Int = (value.toFloat() * context.resources.displayMetrics.density).roundToInt()
 
+    /**
+     * A text field's cursor, selection handles and selected text in [color] (its text's), the same
+     * in every field, instead of the theme's white, which can't be seen on a light field.
+     */
+    fun cursor(field: android.widget.TextView, color: Int) {
+        val ctx = field.context
+        field.textCursorDrawable = GradientDrawable().apply {
+            setColor(color)
+            setSize(dp(ctx, 2), 0)
+            cornerRadius = dp(ctx, 1).toFloat()
+        }
+        field.highlightColor = (color and 0xFFFFFF) or 0x40000000
+        field.textSelectHandle?.mutate()?.let { it.setTint(color); field.setTextSelectHandle(it) }
+        field.textSelectHandleLeft?.mutate()?.let { it.setTint(color); field.setTextSelectHandleLeft(it) }
+        field.textSelectHandleRight?.mutate()?.let { it.setTint(color); field.setTextSelectHandleRight(it) }
+    }
+
     fun rounded(context: Context, color: Int, radiusDp: Int, strokeColor: Int = 0): GradientDrawable =
         GradientDrawable().apply {
             setColor(color)
