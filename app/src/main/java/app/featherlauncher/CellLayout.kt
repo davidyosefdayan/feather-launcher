@@ -28,10 +28,8 @@ class CellLayout(context: Context, attrs: AttributeSet? = null) : ViewGroup(cont
     var dropPreviewIsIcon = false
     /** Dropping here makes or fills a folder: draw the highlight stronger. */
     var dropPreviewGrow = false
-    /** The icons here have names under them (pages, when names are shown; never the dock). */
-    var labels = false
-    /** How far above the cell's center icons sit (they're raised by half the room kept for their names). */
-    val iconOffset get() = if (labels) AppIconView.labelSpace(context, cellHeight.roundToInt()) / 2f else 0f
+    /** How far above the cell's center icons sit (they're raised by half the name under them). */
+    var iconOffset = 0f
 
     private val previewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x33FFFFFF }
     private val previewRadius = Ui.dp(context, 18).toFloat()
