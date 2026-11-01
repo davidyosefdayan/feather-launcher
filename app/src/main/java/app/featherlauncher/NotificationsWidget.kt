@@ -268,8 +268,8 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
             addView(more, LayoutParams(dp(18), dp(18)).apply { marginStart = dp(8) })
         }
 
-        // Swiping it to either side clears it, as in the shade; one that can't be cleared stays,
-        // and the swipe is the page's.
+        // Swiping it to either side clears it, as in the shade. One that can't be cleared still
+        // takes the swipe, so it stays put and doesn't turn the page either.
         private val slop = ViewConfiguration.get(context).scaledTouchSlop
         private var downX = 0f
         private var downY = 0f
@@ -277,7 +277,6 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
         private var velocity: VelocityTracker? = null
 
         override fun onTouchEvent(ev: MotionEvent): Boolean {
-            if (!note.clearable) return super.onTouchEvent(ev)
             velocity = (velocity ?: VelocityTracker.obtain()).also { it.addMovement(ev) }
             // Raw positions: the row itself moves under the finger.
             val dx = ev.rawX - downX
@@ -308,6 +307,7 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
                     velocity = null
                     if (swiping) {
                         swiping = false
+                        if (!note.clearable) return true
                         val flung = abs(vx) > dp(FLING) && sign(vx) == sign(dx)
                         if (ev.actionMasked == MotionEvent.ACTION_UP && (abs(dx) > width / 3 || flung)) {
                             away(if (dx > 0) 1 else -1, keypad = false)
@@ -319,6 +319,7 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
                 }
             }
             if (swiping) {
+                if (!note.clearable) return true
                 translationX = dx
                 alpha = 1f - (abs(dx) / width).coerceIn(0f, 0.8f)
                 return true
