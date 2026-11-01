@@ -324,7 +324,7 @@ class SettingsActivity : Activity() {
         )))
         system(p)
         content.addView(TextView(this).apply {
-            text = "Feather Launcher ${packageManager.getPackageInfo(packageName, 0).versionName}"
+            text = "${getString(R.string.app_name)} ${packageManager.getPackageInfo(packageName, 0).versionName}"
             style(TextStyle.Caption, p.textTertiary)
             gravity = Gravity.CENTER
             setPadding(0, dp(Ui.SPACE_XL), 0, 0)
@@ -579,6 +579,15 @@ class SettingsActivity : Activity() {
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, 0, 0, dp(Ui.SPACE_M))
+        }
+        if (updates.isDev) {
+            column.addView(TextView(this).apply {
+                text = "This is Feather Dev, a test build. It doesn't update itself: install a newer Dev build over it."
+                style(TextStyle.Body, p.text)
+                setPadding(dp(Ui.SPACE_XL), 0, dp(Ui.SPACE_XL), dp(Ui.SPACE_L))
+            })
+            overlays.showSheet("Updates", column)
+            return
         }
         if (release == null) {
             column.addView(TextView(this).apply {

@@ -79,7 +79,7 @@
             android:launchMode="singleTask"
             android:noHistory="true"
             android:screenOrientation="nosensor"
-            android:taskAffinity="app.featherlauncher.limit"
+            android:taskAffinity="${applicationId}.limit"
             android:theme="@style/Theme.Launcher" />
 
         <service

@@ -33,6 +33,9 @@ class Updates private constructor(private val context: Context) {
 
     val currentVersion: String = context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0"
 
+    /** Feather Dev doesn't update itself: GitHub's releases are the real Feather, a different app. */
+    val isDev = context.packageName.endsWith(".dev")
+
     /** The newest release, if it's newer than this version. */
     var available: Release? = load()
         private set
@@ -43,6 +46,7 @@ class Updates private constructor(private val context: Context) {
 
     /** Checks again if the last check was a day or more ago. */
     fun checkIfDue() {
+        if (isDev) return
         if (System.currentTimeMillis() - sp.getLong("checked", 0) < DAY) return
         check { if (it) notifyIfNew() }
     }
@@ -237,10 +241,10 @@ class Updates private constructor(private val context: Context) {
                 .replace(Regex("""^(\s*)[-*]\s+"""), "$1• ")
         }.trim()
 
-        /** Compares versions like "1.10" and "1.9" number by number. */
+        /** Compares versions like "1.10" and "1.9" number by number; a beta ("1.5 beta 112") counts as its release. */
         fun isNewer(version: String, than: String): Boolean {
-            val a = version.split('.').map { it.toIntOrNull() ?: 0 }
-            val b = than.split('.').map { it.toIntOrNull() ?: 0 }
+            val a = version.substringBefore(' ').split('.').map { it.toIntOrNull() ?: 0 }
+            val b = than.substringBefore(' ').split('.').map { it.toIntOrNull() ?: 0 }
             for (i in 0 until maxOf(a.size, b.size)) {
                 val d = a.getOrElse(i) { 0 } - b.getOrElse(i) { 0 }
                 if (d != 0) return d > 0
