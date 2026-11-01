@@ -18,7 +18,6 @@ android {
         applicationId = "app.featherlauncher"
         minSdk = 30
         targetSdk = 37
-        testInstrumentationRunner = "app.featherlauncher.SearchUiTests"
         // Raise both for every release; the updater compares versionName with the release's tag (v1.1).
         versionCode = 6
         versionName = "1.5"
