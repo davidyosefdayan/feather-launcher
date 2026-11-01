@@ -213,7 +213,7 @@ class LimitSettings(private val s: SettingsActivity) {
             },
         )))
         s.content.addView(Components.footnote(s, p,
-            "App limits need this to lock apps however they're opened. In Accessibility, open Feather Launcher and turn it on."))
+            "App limits need this to lock apps however they're opened. In Accessibility, open ${s.getString(R.string.app_name)} and turn it on."))
     }
 
     /** "Block · 11:00 PM–6:00 AM · 5 apps", or "Off". */

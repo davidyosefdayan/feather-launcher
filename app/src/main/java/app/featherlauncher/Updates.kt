@@ -25,17 +25,32 @@ import java.util.concurrent.Executors
  * hands it to Android's installer, which only accepts it if it's signed with the same key.
  */
 class Updates private constructor(private val context: Context) {
-    class Release(val version: String, val apkUrl: String, val size: Long, val sha256: String?, val notes: String)
+    /** [code] is a beta's versionCode, which is how betas are compared; 0 for a release. [published] is when it came out. */
+    class Release(val version: String, val apkUrl: String, val size: Long, val sha256: String?, val notes: String,
+        val code: Long = 0, val published: Long = 0)
 
     private val sp = context.getSharedPreferences("updates", Context.MODE_PRIVATE)
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
 
-    val currentVersion: String = context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0"
+    private val info = context.packageManager.getPackageInfo(context.packageName, 0)
+    val currentVersion: String = info.versionName ?: "0"
+    private val currentCode = info.longVersionCode
+
+    /** Feather Dev doesn't update itself: GitHub's releases are the real Feather, a different app. */
+    val isDev = context.packageName.endsWith(".dev")
 
     /** The newest release, if it's newer than this version. */
     var available: Release? = load()
         private set
+
+    /**
+     * Also offers betas, the test builds GitHub makes from every change. On by itself once a beta
+     * is installed.
+     */
+    var betas: Boolean
+        get() = sp.getBoolean("betas", " beta " in currentVersion)
+        set(value) = sp.edit().putBoolean("betas", value).apply()
 
     /** Downloading or installing right now. */
     var busy = false
@@ -43,6 +58,7 @@ class Updates private constructor(private val context: Context) {
 
     /** Checks again if the last check was a day or more ago. */
     fun checkIfDue() {
+        if (isDev) return
         if (System.currentTimeMillis() - sp.getLong("checked", 0) < DAY) return
         check { if (it) notifyIfNew() }
     }
@@ -51,10 +67,13 @@ class Updates private constructor(private val context: Context) {
     fun check(done: (Boolean) -> Unit) {
         io.execute {
             val latest = runCatching { retrying { parse(JSONObject(fetch(LATEST))) } }
+            // There's no beta between a release and the next change.
+            val beta = if (betas) runCatching { retrying { parse(JSONObject(fetch(BETA))) } }.getOrNull() else null
             main.post {
                 latest.onSuccess { release ->
                     sp.edit().putLong("checked", System.currentTimeMillis()).apply()
-                    save(release?.takeIf { isNewer(it.version, currentVersion) })
+                    // Of the release and the beta, whichever came out last.
+                    save(listOfNotNull(release, beta).filter(::isNewerThanThis).maxByOrNull { it.published })
                 }
                 done(latest.isSuccess)
             }
@@ -82,7 +101,7 @@ class Updates private constructor(private val context: Context) {
 
     private fun download(release: Release, progress: (Int) -> Unit): File {
         val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-        val apk = File(dir, "FeatherLauncher-${release.version}.apk")
+        val apk = File(dir, "FeatherLauncher-${release.version.replace(' ', '-')}.apk")
         // One update on disk at a time; a good copy from an earlier try is used again.
         dir.listFiles()?.forEach { if (it != apk) it.delete() }
         if (apk.exists() && problem(apk, release) == null) return apk
@@ -171,15 +190,23 @@ class Updates private constructor(private val context: Context) {
             if (release == null) remove("release")
             else putString("release", JSONObject()
                 .put("version", release.version).put("url", release.apkUrl).put("size", release.size)
-                .put("sha256", release.sha256).put("notes", release.notes).toString())
+                .put("sha256", release.sha256).put("notes", release.notes).put("code", release.code).put("published", release.published).toString())
         }.apply()
     }
 
     /** The saved release, unless this version has caught up with it (it was just installed). */
     private fun load(): Release? = runCatching {
         val o = JSONObject(sp.getString("release", null) ?: return null)
-        Release(o.getString("version"), o.getString("url"), o.optLong("size"), o.optString("sha256").ifEmpty { null }, o.optString("notes"))
-    }.getOrNull()?.takeIf { isNewer(it.version, currentVersion) }
+        Release(o.getString("version"), o.getString("url"), o.optLong("size"), o.optString("sha256").ifEmpty { null }, o.optString("notes"),
+            o.optLong("code"), o.optLong("published"))
+    }.getOrNull()?.takeIf { isNewerThanThis(it) }
+
+    private fun isNewerThanThis(release: Release) = when {
+        release.code > 0 -> release.code > currentCode
+        isNewer(release.version, currentVersion) -> true
+        // The release a beta led up to ("1.7" over "1.7 beta 120"), if it came out after the beta was installed.
+        else -> " beta " in currentVersion && !isNewer(currentVersion, release.version) && release.published > info.lastUpdateTime
+    }
 
     private fun fetch(url: String): String = open(url).apply {
         setRequestProperty("Accept", "application/vnd.github+json")
@@ -210,6 +237,7 @@ class Updates private constructor(private val context: Context) {
 
     companion object {
         private const val LATEST = "https://api.github.com/repos/davidyosefdayan/feather-launcher/releases/latest"
+        private const val BETA = "https://api.github.com/repos/davidyosefdayan/feather-launcher/releases/tags/beta"
         private const val DAY = 24 * 60 * 60 * 1000L
         private const val CHANNEL = "updates"
         private const val NOTIFICATION = 7001
@@ -219,15 +247,21 @@ class Updates private constructor(private val context: Context) {
         fun get(context: Context): Updates =
             instance ?: synchronized(this) { instance ?: Updates(context.applicationContext).also { instance = it } }
 
-        /** A release with its APK, or null when it has none. Tags look like "v1.2". */
+        /**
+         * A release with its APK, or null when it has none. Tags look like "v1.2"; the beta's tag
+         * is "beta", and its version is in its title ("Feather Launcher 1.6 beta 112").
+         */
         private fun parse(o: JSONObject): Release? {
             val assets = o.getJSONArray("assets")
             val apk = (0 until assets.length()).map { assets.getJSONObject(it) }
                 .firstOrNull { it.getString("name").endsWith(".apk") } ?: return null
             // GitHub publishes each file's checksum as "sha256:<hex>".
             val digest = apk.optString("digest").removePrefix("sha256:").lowercase().takeIf { it.length == 64 }
-            return Release(o.getString("tag_name").removePrefix("v"), apk.getString("browser_download_url"),
-                apk.optLong("size"), digest, plain(o.optString("body")))
+            val beta = o.getString("tag_name") == "beta"
+            val version = if (beta) o.optString("name").removePrefix("Feather Launcher ") else o.getString("tag_name").removePrefix("v")
+            return Release(version, apk.getString("browser_download_url"), apk.optLong("size"), digest, plain(o.optString("body")),
+                if (beta) version.substringAfterLast(" beta ").toLongOrNull() ?: return null else 0,
+                runCatching { java.time.Instant.parse(o.getString("published_at")).toEpochMilli() }.getOrDefault(0))
         }
 
         /** Release notes are Markdown on GitHub; in the app they're plain text with bullets. */
@@ -237,10 +271,10 @@ class Updates private constructor(private val context: Context) {
                 .replace(Regex("""^(\s*)[-*]\s+"""), "$1• ")
         }.trim()
 
-        /** Compares versions like "1.10" and "1.9" number by number. */
+        /** Compares versions like "1.10" and "1.9" number by number; a beta ("1.5 beta 112") counts as its release. */
         fun isNewer(version: String, than: String): Boolean {
-            val a = version.split('.').map { it.toIntOrNull() ?: 0 }
-            val b = than.split('.').map { it.toIntOrNull() ?: 0 }
+            val a = version.substringBefore(' ').split('.').map { it.toIntOrNull() ?: 0 }
+            val b = than.substringBefore(' ').split('.').map { it.toIntOrNull() ?: 0 }
             for (i in 0 until maxOf(a.size, b.size)) {
                 val d = a.getOrElse(i) { 0 } - b.getOrElse(i) { 0 }
                 if (d != 0) return d > 0

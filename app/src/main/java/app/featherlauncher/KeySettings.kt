@@ -54,7 +54,7 @@ class KeySettings(private val s: SettingsActivity) {
                 },
             )))
             content.addView(Components.footnote(s, p,
-                "Allow accessibility access to use key shortcuts and hold number keys for actions instead of speed dial. Open Feather Launcher in Accessibility and turn it on."))
+                "Allow accessibility access to use key shortcuts and hold number keys for actions instead of speed dial. Open ${s.getString(R.string.app_name)} in Accessibility and turn it on."))
         }
 
         content.addView(s.heading(p, "Gestures"))

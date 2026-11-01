@@ -77,7 +77,12 @@ class SettingsActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
-        build()
+        // Once onResume has redrawn the page: a sheet opened before that (Restore this backup?)
+        // would be wiped away with it.
+        root.post { onResult(requestCode, resultCode, data) }
+    }
+
+    private fun onResult(requestCode: Int, resultCode: Int, data: Intent?) {
         val uri = data?.data
         if (resultCode == RESULT_OK && uri != null) {
             if (requestCode == REQUEST_BACKUP) return saveBackup(uri)
@@ -324,7 +329,7 @@ class SettingsActivity : Activity() {
         )))
         system(p)
         content.addView(TextView(this).apply {
-            text = "Feather Launcher ${packageManager.getPackageInfo(packageName, 0).versionName}"
+            text = "${getString(R.string.app_name)} ${packageManager.getPackageInfo(packageName, 0).versionName}"
             style(TextStyle.Caption, p.textTertiary)
             gravity = Gravity.CENTER
             setPadding(0, dp(Ui.SPACE_XL), 0, 0)
@@ -580,6 +585,37 @@ class SettingsActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(0, 0, 0, dp(Ui.SPACE_M))
         }
+        if (updates.isDev) {
+            column.addView(TextView(this).apply {
+                text = "This is Feather Dev, a test build. It doesn't update itself: install a newer Dev build over it."
+                style(TextStyle.Body, p.text)
+                setPadding(dp(Ui.SPACE_XL), 0, dp(Ui.SPACE_XL), dp(Ui.SPACE_L))
+            })
+            overlays.showSheet("Updates", column)
+            return
+        }
+        fun check() {
+            say("Checking…")
+            updates.check { ok ->
+                when {
+                    !ok -> say("Couldn't check. Make sure you're online and try again.")
+                    updates.available == null && release == null -> say("You have the newest version.")
+                    else -> {
+                        overlays.dismiss()
+                        build()
+                        updatesSheet()
+                    }
+                }
+            }
+        }
+        fun addBetaSwitch() {
+            column.addView(Components.toggleRow(this, p, R.drawable.ic_set_code, "Get beta updates", updates.betas) {
+                updates.betas = it
+                check()
+            })
+            column.addView(Components.footnote(this, p,
+                "Betas are test builds of what's coming next, made after every change. They can have bugs."))
+        }
         if (release == null) {
             column.addView(TextView(this).apply {
                 text = "You have version ${updates.currentVersion}."
@@ -587,20 +623,8 @@ class SettingsActivity : Activity() {
                 setPadding(dp(Ui.SPACE_XL), 0, dp(Ui.SPACE_XL), dp(Ui.SPACE_M))
             })
             column.addView(status)
-            column.addView(Components.row(this, p, R.drawable.ic_refresh, "Check for updates", color = p.accent) {
-                say("Checking…")
-                updates.check { ok ->
-                    when {
-                        !ok -> say("Couldn't check. Make sure you're online and try again.")
-                        updates.available == null -> say("You have the newest version.")
-                        else -> {
-                            overlays.dismiss()
-                            build()
-                            updatesSheet()
-                        }
-                    }
-                }
-            })
+            column.addView(Components.row(this, p, R.drawable.ic_refresh, "Check for updates", color = p.accent) { check() })
+            addBetaSwitch()
             overlays.showSheet("Updates", column)
             return
         }
@@ -641,6 +665,7 @@ class SettingsActivity : Activity() {
         }
         installRow = Components.row(this, p, R.drawable.ic_arrow_downward, "Install ${release.version}", color = p.accent) { install() }
         column.addView(installRow)
+        addBetaSwitch()
         overlays.showSheet("Feather Launcher ${release.version}", column, scrollable = notes)
         if (installNow) install()
     }

@@ -72,14 +72,28 @@ The first time it opens, a short welcome sets it as your home screen and lets yo
 
 Requires Android 13 or later.
 
+### Feather Dev and betas
+
+**Feather Dev** is a separate app for trying out work that isn't released yet. It installs next to Feather, with its own settings, so your real home screen isn't touched. It has an orange icon. Build and install it with:
+
+```sh
+./gradlew installDebug
+```
+
+Test builds of branches and pull requests go to Feather Dev, never over the real Feather. Every pull request gets a Feather Dev build on GitHub, linked in a comment. Every Feather Dev build is signed with the same public test key (`app/feather-dev.jks`), so any one installs over any other and keeps its settings. Feather Dev doesn't update itself.
+
+To copy your setup into Feather Dev, use **Settings → Backup and restore**: save a backup in Feather, then restore it in Feather Dev (or the other way round). To switch which one is your home screen, use **Settings → Default home app** in either one, or your phone's Settings → Apps → Default apps → Home app.
+
+**Betas:** every merge to `main` builds the real Feather as the [beta](https://github.com/davidyosefdayan/feather-launcher/releases/tag/beta) pre-release, replacing the one before. It installs over Feather, and the next release updates it as usual. To get each new beta through the app's updater, turn on **Settings → Updates → Get beta updates** (on by itself once a beta is installed); turned off, it waits for the next release.
+
 ### Updates
 
 Once a day the app checks this repository's latest release. When there's a newer version, a notification says so and **Settings → Updates** installs it: the app downloads the APK, checks it against the release's checksum, and hands it to Android, which only accepts it if it's signed with the same key. The first time, Android asks you to allow Feather Launcher to install apps.
 
 To publish a release:
 
-1. Raise `versionCode` and `versionName` in `app/build.gradle.kts`.
-2. Build with `./gradlew :app:assembleRelease`, signed with the release key (`setup/keystore.properties`). Every release must use the same key, or phones can't update to it.
+1. Raise the version (`val release`) in `app/build.gradle.kts`. The `versionCode` is the number of commits, so it goes up by itself.
+2. Build from an up-to-date `main` with `./gradlew :app:assembleRelease`, signed with the release key (`setup/keystore.properties`). Every release must use the same key, or phones can't update to it.
 3. Create a GitHub release tagged `v` plus the version name (`v1.1`) and attach the APK as `FeatherLauncher-1.1.apk`.
 4. Write the release notes as a changelog of what this version changed, not install steps (those are here): a sentence on what the release is about, then short plain items under **New**, **Changed** and **Fixed**, saying where to find new things (Settings → App limits), and a **Full changelog** link comparing with the last version. The app shows these notes on its update screen.
 
