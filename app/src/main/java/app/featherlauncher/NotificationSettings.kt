@@ -24,7 +24,7 @@ class NotificationSettings(private val s: SettingsActivity) {
                 },
             )))
             content.addView(Components.footnote(s, p,
-                "Allow notification access to filter incoming notifications. Open Feather Launcher in the list and turn on access."))
+                "Allow notification access to filter incoming notifications. Open ${s.getString(R.string.app_name)} in the list and turn on access."))
         }
 
         content.addView(s.heading(p, "Filters"))
