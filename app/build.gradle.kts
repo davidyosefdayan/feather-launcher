@@ -16,7 +16,7 @@ android {
 
     defaultConfig {
         applicationId = "app.featherlauncher"
-        minSdk = 33
+        minSdk = 30
         targetSdk = 37
         // Raise both for every release; the updater compares versionName with the release's tag (v1.1).
         versionCode = 6

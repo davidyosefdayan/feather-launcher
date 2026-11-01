@@ -117,14 +117,21 @@ class Palette(
                 ?: floatArrayOf(ColorStyle.OCEAN.hue, ColorStyle.OCEAN.saturation, 0.3f)
             // Android's hint isn't always set (a pale pastel can come without it), so the
             // wallpaper's own average brightness counts too.
-            val wallpaperIsLight = colors != null &&
-                (colors.colorHints and android.app.WallpaperColors.HINT_SUPPORTS_DARK_TEXT != 0 || seed[2] > 0.7f)
+            val wallpaperIsLight = colors != null && (hints(colors) and HINT_SUPPORTS_DARK_TEXT != 0 || seed[2] > 0.7f)
             android.util.Log.d("Palette", "wallpaper average -> hue ${seed[0]} sat ${seed[1]} light ${seed[2]}")
             val custom = if (accentColor != 0) rgbToHsl(accentColor) else null
             val hue = custom?.get(0) ?: if (style == ColorStyle.WALLPAPER) seed[0] else style.hue
             val saturation = custom?.get(1)?.coerceAtLeast(0.35f) ?: if (style == ColorStyle.WALLPAPER) seed[1] else style.saturation
             return Palette(hue, saturation, dark, wallpaperIsLight, seed[0], seed[1], seed[2])
         }
+
+        /** Same as WallpaperColors.HINT_SUPPORTS_DARK_TEXT, which Android 11 has but keeps private. */
+        private const val HINT_SUPPORTS_DARK_TEXT = 1
+
+        /** What Android worked out about the wallpaper; Android 11 only shares it privately. */
+        private fun hints(colors: android.app.WallpaperColors): Int =
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) colors.colorHints
+            else runCatching { colors.javaClass.getMethod("getColorHints").invoke(colors) as Int }.getOrDefault(0)
 
         /**
          * The wallpaper's average color. Android works out every color in the wallpaper with how

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
@@ -54,12 +55,13 @@ class SettingsActivity : Activity() {
             field = value
             // Android hands Back to back handlers, not as a key; while a key is being chosen, this
             // one takes it so Back can be chosen too (on a phone without a power button, double
-            // pressing it can lock the screen).
+            // pressing it can lock the screen). Older Android sends Back as a key, caught below.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
             if (value != null) onBackInvokedDispatcher.registerOnBackInvokedCallback(
                 android.window.OnBackInvokedDispatcher.PRIORITY_OVERLAY, captureBack)
             else onBackInvokedDispatcher.unregisterOnBackInvokedCallback(captureBack)
         }
-    private val captureBack = android.window.OnBackInvokedCallback { keyCapture?.invoke(listOf(KeyEvent.KEYCODE_BACK)) }
+    private val captureBack by lazy { android.window.OnBackInvokedCallback { keyCapture?.invoke(listOf(KeyEvent.KEYCODE_BACK)) } }
     /** Keys down during a capture, in the order they were pressed. */
     private val captured = ArrayList<Int>()
     private var onContactPicked: ((number: String, name: String?) -> Unit)? = null
@@ -115,7 +117,7 @@ class SettingsActivity : Activity() {
         setContentView(root)
 
         // Newer Android sends Back here instead of as a key press.
-        onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { if (!overlays.dismiss()) back() }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { if (!overlays.dismiss()) back() }
         root.setOnApplyWindowInsetsListener { _, windowInsets ->
             val bars = windowInsets.getInsets(WindowInsets.Type.systemBars())
             val next = Rect(bars.left, bars.top, bars.right, bars.bottom)
@@ -418,7 +420,9 @@ class SettingsActivity : Activity() {
             IconLookSetting.DARK -> IconLook.DARK
             IconLookSetting.TINTED -> IconLook.TINTED
         }
-        setImageBitmap(prefs.iconShape.render(drawable, dp(44), iconLook, DarkMode.tint(this@SettingsActivity, prefs)))
+        val mono = if (iconLook == IconLook.TINTED && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU)
+            IconLooks.monochromeOf(this@SettingsActivity, sample.component) else null
+        setImageBitmap(prefs.iconShape.render(drawable, dp(44), iconLook, DarkMode.tint(this@SettingsActivity, prefs), mono))
     }
 
     /** From the wallpaper (automatically), one of the wallpaper's own colors, or any color on the slider. */
@@ -705,7 +709,8 @@ class SettingsActivity : Activity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        keyCapture?.takeIf { overlays.isShowing && event.keyCode != KeyEvent.KEYCODE_BACK || captured.isNotEmpty() }?.let { capture ->
+        val backIsKey = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+        keyCapture?.takeIf { overlays.isShowing && (event.keyCode != KeyEvent.KEYCODE_BACK || backIsKey) || captured.isNotEmpty() }?.let { capture ->
             // Decided when the first key comes back up, so a second key pressed with it counts too.
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && event.keyCode !in captured && captured.size < 2) {
                 captured += event.keyCode

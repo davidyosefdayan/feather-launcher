@@ -1,5 +1,7 @@
 package app.featherlauncher
 
+import android.content.ComponentName
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -11,6 +13,9 @@ import android.graphics.Rect
 import android.graphics.Shader
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
+import android.os.Build
+import android.util.DisplayMetrics
+import org.xmlpull.v1.XmlPullParser
 
 /**
  * Dark and tinted icons, like iOS: the app's symbol on a deep charcoal plate instead of its own.
@@ -30,7 +35,7 @@ object IconLooks {
     private const val LIGHT_GLYPH = 0xFFE8E9EC.toInt()
 
     /** Draws [icon] in [look] into [canvas] ([size] square; layers are drawn [inset] past the edges). */
-    fun drawAdaptive(canvas: Canvas, icon: AdaptiveIconDrawable, size: Int, inset: Int, look: IconLook, tint: Int) {
+    fun drawAdaptive(canvas: Canvas, icon: AdaptiveIconDrawable, size: Int, inset: Int, look: IconLook, tint: Int, monochrome: Drawable? = null) {
         val bounds = Rect(-inset, -inset, size + inset, size + inset)
         val fg = icon.foreground?.let { layer(it, size, bounds) }
         val bg = icon.background?.let { layer(it, size, bounds) }
@@ -39,7 +44,7 @@ object IconLooks {
         }
         if (look == IconLook.TINTED) {
             drawPlate(canvas, size)
-            val mono = icon.monochrome
+            val mono = monochrome ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) icon.monochrome else null
             if (mono != null) {
                 mono.mutate().apply {
                     this.bounds = bounds
@@ -54,6 +59,27 @@ object IconLooks {
         }
         drawDark(canvas, size, symbolOf(fg, bg, whole), whole)
     }
+
+    /**
+     * The one-color layer an app gives its icon for themed icons. Android 11 and 12 skip that
+     * layer when they load the icon (13 added it), so there it's read from the icon's file.
+     */
+    fun monochromeOf(context: Context, component: ComponentName): Drawable? = runCatching {
+        val pm = context.packageManager
+        val id = pm.getActivityInfo(component, 0).iconResource.takeIf { it != 0 } ?: return null
+        val res = pm.getResourcesForApplication(component.packageName)
+        val xml = res.getXml(id)
+        try {
+            while (xml.next() != XmlPullParser.END_DOCUMENT) {
+                if (xml.eventType != XmlPullParser.START_TAG || xml.name != "monochrome") continue
+                val layer = xml.getAttributeResourceValue("http://schemas.android.com/apk/res/android", "drawable", 0)
+                return if (layer != 0) res.getDrawableForDensity(layer, DisplayMetrics.DENSITY_XHIGH, null) else null
+            }
+            null
+        } finally {
+            xml.close()
+        }
+    }.getOrNull()
 
     /** For old-style single-picture icons: [whole] is the icon as drawn. Changes it in place. */
     fun darkenWhole(whole: Bitmap) {

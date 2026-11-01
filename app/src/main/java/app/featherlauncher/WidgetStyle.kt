@@ -1,5 +1,6 @@
 package app.featherlauncher
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
@@ -15,6 +16,8 @@ import android.widget.TextView
  * the app's theme, with large rounded corners; and on the wallpaper itself, white type with a
  * soft shadow and nothing behind it, like the Pixel's At a glance.
  */
+// Android 12's color ids are also how Android 11 asks for its own version of them (see system).
+@SuppressLint("InlinedApi")
 object WidgetStyle {
     const val WHITE = 0xFFFFFFFF.toInt()
     const val SOFT_WHITE = 0xD9FFFFFF.toInt()
@@ -28,8 +31,13 @@ object WidgetStyle {
 
     private fun dark() = palette()?.dark ?: true
 
-    private fun system(dark: Int, light: Int, fallback: Int): Int =
-        context?.getColor(if (dark()) dark else light) ?: fallback
+    private fun system(dark: Int, light: Int, fallback: Int): Int {
+        val ctx = context ?: return fallback
+        val id = if (dark()) dark else light
+        // Android 11 doesn't have these colors, so they're made the same way from the wallpaper.
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) return MaterialYou.color(ctx, id, palette()) ?: fallback
+        return ctx.getColor(id)
+    }
 
     /** A card's background, its text, and its quieter text. */
     fun card() = system(android.R.color.system_accent2_800, android.R.color.system_accent2_50, 0xFF2B2D31.toInt())

@@ -6,6 +6,7 @@ import android.app.ActivityOptions
 import android.app.WallpaperManager
 import android.content.res.ColorStateList
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Handler
 import android.text.TextUtils
 import android.view.Gravity
@@ -92,7 +93,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         window.setDecorFitsSystemWindows(false)
         setContentView(R.layout.activity_home)
         // Newer Android sends Back here instead of as a key press.
-        onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { onBack() }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { onBack() }
 
         prefs = Prefs(this)
         palette = currentPalette()

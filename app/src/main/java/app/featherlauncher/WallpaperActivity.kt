@@ -13,7 +13,9 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.Shader
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.ext.SdkExtensions
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
@@ -88,7 +90,7 @@ class WallpaperActivity : Activity() {
             }
             windowInsets
         }
-        onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { back() }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { back() }
         build()
     }
 
@@ -279,8 +281,7 @@ class WallpaperActivity : Activity() {
                 subtitle = "Choose photos for Photo Shuffle", chevron = true, inset = Ui.SPACE_L) {
                 overlays.dismiss()
                 @Suppress("DEPRECATION")
-                startActivityForResult(Intent(MediaStore.ACTION_PICK_IMAGES).setType("image/*")
-                    .putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, MediaStore.getPickImagesMaxLimit()), REQUEST_SHUFFLE)
+                startActivityForResult(photoPicker(many = true), REQUEST_SHUFFLE)
             }) + COLLECTIONS.map { (name, ids) ->
                 Components.row(this@WallpaperActivity, p, R.drawable.ic_shuffle, name, subtitle = "${ids.size} photos · Internet required",
                     color = if (prefs.shuffleOn && prefs.shuffleCollection == name) p.accent else p.text, inset = Ui.SPACE_L) {
@@ -551,10 +552,24 @@ class WallpaperActivity : Activity() {
     // region Picking a photo from the phone
 
     private fun pickPhoto() {
-        // The system's photo picker needs no permission and shows only what's chosen to the app.
         @Suppress("DEPRECATION")
-        startActivityForResult(Intent(MediaStore.ACTION_PICK_IMAGES).setType("image/*"), REQUEST_PHOTO)
+        startActivityForResult(photoPicker(many = false), REQUEST_PHOTO)
     }
+
+    /**
+     * The system's photo picker, which needs no permission and shows only what's chosen to the
+     * app. Android 11 and 12 get it from a system update; phones without it choose photos with
+     * the phone's file picker, which works the same way.
+     */
+    private fun photoPicker(many: Boolean): Intent =
+        if (SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) >= 2) {
+            Intent(MediaStore.ACTION_PICK_IMAGES).setType("image/*").apply {
+                if (many) putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, MediaStore.getPickImagesMaxLimit())
+            }
+        } else {
+            Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE)
+                .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, many)
+        }
 
     @Deprecated("Platform Activity API")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

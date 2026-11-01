@@ -89,11 +89,36 @@ class Widgets(
         return ceil((dp - 8) / size).toInt().coerceIn(1, if (horizontal) Workspace.COLS else Workspace.ROWS)
     }
 
-    private fun spanX(info: AppWidgetProviderInfo) =
-        if (info.targetCellWidth > 0) info.targetCellWidth.coerceAtMost(Workspace.COLS) else cells(info.minWidth / density, true)
+    private fun spanX(info: AppWidgetProviderInfo) = targetCells(info).first.let { target ->
+        if (target > 0) target.coerceAtMost(Workspace.COLS) else cells(info.minWidth / density, true)
+    }
 
-    private fun spanY(info: AppWidgetProviderInfo) =
-        if (info.targetCellHeight > 0) info.targetCellHeight.coerceAtMost(Workspace.ROWS) else cells(info.minHeight / density, false)
+    private fun spanY(info: AppWidgetProviderInfo) = targetCells(info).second.let { target ->
+        if (target > 0) target.coerceAtMost(Workspace.ROWS) else cells(info.minHeight / density, false)
+    }
+
+    /**
+     * The size in cells the widget asks to start at, or 0 when it doesn't say. Android 11 doesn't
+     * read that from the widget's file (12 added it), so there the file is read here.
+     */
+    private fun targetCells(info: AppWidgetProviderInfo): Pair<Int, Int> {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) return info.targetCellWidth to info.targetCellHeight
+        return runCatching {
+            val pm = activity.packageManager
+            val receiver = pm.getReceiverInfo(info.provider, android.content.pm.PackageManager.GET_META_DATA)
+            val xml = receiver.loadXmlMetaData(pm, AppWidgetManager.META_DATA_APPWIDGET_PROVIDER) ?: return 0 to 0
+            try {
+                while (xml.next() != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                    if (xml.eventType != org.xmlpull.v1.XmlPullParser.START_TAG || xml.name != "appwidget-provider") continue
+                    val android = "http://schemas.android.com/apk/res/android"
+                    return xml.getAttributeIntValue(android, "targetCellWidth", 0) to xml.getAttributeIntValue(android, "targetCellHeight", 0)
+                }
+                0 to 0
+            } finally {
+                xml.close()
+            }
+        }.getOrDefault(0 to 0)
+    }
 
     // region Picker
 
@@ -352,6 +377,8 @@ class Widgets(
 
     private fun configure(info: AppWidgetProviderInfo?) {
         if (info == null) return cancelPending()
+        // Android 11 passes this flag along from the widget's file too, though it came in 12.
+        @android.annotation.SuppressLint("InlinedApi")
         val optional = info.widgetFeatures and AppWidgetProviderInfo.WIDGET_FEATURE_CONFIGURATION_OPTIONAL != 0
         if (info.configure == null || optional) return finishAdd()
         try {

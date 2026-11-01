@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.LauncherApps
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
@@ -153,7 +154,9 @@ class AppRepository(private val context: Context, shape: IconShape) {
                 newIcons[key] = if (dated == null && old != null && old.updatedAt == updatedAt && cachedIcon != null) {
                     cachedIcon
                 } else {
-                    shape.render(dated ?: info.getIcon(DisplayMetrics.DENSITY_XHIGH), iconSize, passLook, passTint).also { saveIcon(key, it, dir) }
+                    val mono = if (passLook == IconLook.TINTED && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU)
+                        IconLooks.monochromeOf(context, info.componentName) else null
+                    shape.render(dated ?: info.getIcon(DisplayMetrics.DENSITY_XHIGH), iconSize, passLook, passTint, mono).also { saveIcon(key, it, dir) }
                 }
                 AppEntry(info.componentName, info.label.toString(), updatedAt,
                     Category.of(info.componentName.packageName, packageInfo?.applicationInfo))

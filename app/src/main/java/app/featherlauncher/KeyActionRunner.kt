@@ -80,8 +80,7 @@ object KeyActionRunner {
             KeyEvent.KEYCODE_HOME -> (context as? AccessibilityService)?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
             KeyEvent.KEYCODE_STAR, KeyEvent.KEYCODE_POUND -> {
                 // Typed into the text box being edited, if there is one.
-                val connection = (context as? AccessibilityService)?.inputMethod?.currentInputConnection ?: return false
-                connection.commitText(if (keyCode == KeyEvent.KEYCODE_STAR) "*" else "#", 1, null)
+                if ((context as? LauncherService)?.type(if (keyCode == KeyEvent.KEYCODE_STAR) "*" else "#") != true) return false
             }
             else -> return false
         }

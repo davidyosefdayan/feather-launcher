@@ -48,7 +48,10 @@ class WidgetView(context: Context) : AppWidgetHostView(context) {
                 box.set(0, 0, bg.width, bg.height)
                 view.offsetDescendantRectToMyCoords(bg, box)
             }
-            val radius = maxOf(resources.getDimension(android.R.dimen.system_app_widget_background_radius), WidgetStyle.RADIUS * resources.displayMetrics.density)
+            // Android 11 has no corner of its own for widgets.
+            val system = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S)
+                resources.getDimension(android.R.dimen.system_app_widget_background_radius) else 0f
+            val radius = maxOf(system, WidgetStyle.RADIUS * resources.displayMetrics.density)
             corner = minOf(radius, minOf(box.width(), box.height()) / 2f)
             cornerBox.set(box)
             cornerBox.offset(view.left, view.top)
@@ -87,7 +90,14 @@ class WidgetView(context: Context) : AppWidgetHostView(context) {
         // Tell the widget its real size so it can pick a layout that fits.
         if (w > 0 && h > 0) {
             val density = resources.displayMetrics.density
-            updateAppWidgetSize(android.os.Bundle(), listOf(android.util.SizeF(w / density, h / density)))
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                updateAppWidgetSize(android.os.Bundle(), listOf(android.util.SizeF(w / density, h / density)))
+            } else {
+                // Android 11 widgets take a range of sizes; this one size is both ends of it.
+                val (wDp, hDp) = (w / density).toInt() to (h / density).toInt()
+                @Suppress("DEPRECATION")
+                updateAppWidgetSize(android.os.Bundle(), wDp, hDp, wDp, hDp)
+            }
         }
     }
 

@@ -58,10 +58,13 @@ object Setup {
                     Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             })
 
-    private val permissions = listOf(
+    private val permissions = listOfNotNull(
         permission(Manifest.permission.READ_CONTACTS, "Contacts", "To find people in Smart Search", R.drawable.ic_contact),
         permission(Manifest.permission.CALL_PHONE, "Phone calls", "So calling from search starts the call right away", R.drawable.ic_phone_call),
-        permission(Manifest.permission.POST_NOTIFICATIONS, "Notifications", "To tell you when an app limit stops an app's sound", R.drawable.ic_notification),
+        // Before Android 13, apps could show notifications without asking.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU)
+            permission(Manifest.permission.POST_NOTIFICATIONS, "Notifications", "To tell you when an app limit stops an app's sound", R.drawable.ic_notification)
+        else null,
         permission(Manifest.permission.READ_CALENDAR, "Calendar", "To show calendar events on the clock and in Agenda", R.drawable.ic_calendar),
         permission(Manifest.permission.ACCESS_COARSE_LOCATION, "Location", "To show local weather and calculate daily times", R.drawable.ic_location),
     )
