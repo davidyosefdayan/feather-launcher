@@ -99,6 +99,13 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
     private var sizeFactor = 1f
     /** The time's size, before it's made smaller to fit. */
     private var timePx = 200f
+    /** The date's and the quieter line's sizes, before they're made larger with the time hidden. */
+    private var datePx = 60f
+    private var detailPx = 50f
+    private val ring = Ui.focusRing(context, Ui.RADIUS_L, WidgetStyle.WHITE)
+    /** How far the time's line reaches above its digits, last worked out by [spaceRows]. */
+    private var timeHeadroom = -1
+    private val digits = android.graphics.Rect()
 
     /** Tapping something coming up: the day's zmanim, the event, the alarms. */
     var onTap: ((Glance.Item, ClockInfo.Place?) -> Unit)? = null
@@ -132,30 +139,110 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
         // The time does what the clock does (its alarms), so the keypad can reach it like the date and pills.
         time.setOnClickListener { performClick() }
         time.setOnLongClickListener { performLongClick() }
-        // Its highlight hugs the digits, inside the room left for the shadow, so it stays within the clock.
-        time.foreground = android.graphics.drawable.InsetDrawable(Ui.focusRing(context, Ui.RADIUS_L, WidgetStyle.WHITE), dp(SHADOW_ROOM))
-        addView(date, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4) })
-        addView(detail, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(5) })
-        addView(pills, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
+        addView(date, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        addView(detail, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        // The pills' own padding below them is the clock's.
+        addView(pills, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { bottomMargin = -dp(WidgetStyle.PILL_PADDING) })
     }
 
-    /** The space last measured for and the time's scale that fitted it, so the next pass changes nothing. */
-    private var fitted: Triple<Int, Int, Float>? = null
+    /** The space last measured for and the scales that fitted it, so the next pass changes nothing. */
+    private class Fit(val width: Int, val height: Int, val time: Float, val lines: Float)
+    private var fitted: Fit? = null
 
-    /** In a tight space, a smaller time comes first; only then are lines left out. */
+    /**
+     * In a tight space, a smaller time comes first; only then are lines left out. Without the
+     * time, the date and the quieter line take its place: they fill the width inside the same
+     * padding as the pills, as far as the height allows without leaving out anything more.
+     */
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         sizeFor(MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight)
-        fitted?.takeIf { it.first == widthMeasureSpec && it.second == heightMeasureSpec }?.let {
-            time.setTextSize(TypedValue.COMPLEX_UNIT_PX, timePx * it.third)
+        fitted?.takeIf { it.width == widthMeasureSpec && it.height == heightMeasureSpec }?.let {
+            scale(it.time, it.lines)
             return super.onMeasure(widthMeasureSpec, heightMeasureSpec)
         }
+        if (time.visibility == GONE) return fillWithLines(widthMeasureSpec, heightMeasureSpec) { super.onMeasure(widthMeasureSpec, heightMeasureSpec) }
         for (scale in listOf(1f, 0.85f, 0.72f)) {
-            time.setTextSize(TypedValue.COMPLEX_UNIT_PX, timePx * scale)
+            scale(scale, 1f)
             super.onMeasure(widthMeasureSpec, heightMeasureSpec)
-            fitted = Triple(widthMeasureSpec, heightMeasureSpec, scale)
-            val cut = (0 until childCount).map(::getChildAt).any { it.getTag(R.id.fit_hidden) == true && it.visibility == GONE }
-            if (!cut) return
+            fitted = Fit(widthMeasureSpec, heightMeasureSpec, scale, 1f)
+            if (cut().isEmpty()) return
         }
+    }
+
+    private fun fillWithLines(widthMeasureSpec: Int, heightMeasureSpec: Int, measure: () -> Unit) {
+        scale(1f, 1f)
+        measure()
+        fitted = Fit(widthMeasureSpec, heightMeasureSpec, 1f, 1f)
+        val lines = listOf(date, detail).filter { it.visibility == VISIBLE }
+        fun widest() = lines.maxOfOrNull { it.paint.measureText(it.text.toString()) } ?: 0f
+        val widest = widest().takeIf { it > 0f } ?: return
+        // The pills' words sit their own padding in from the column's; the lines do the same, at the clock's size.
+        val room = (MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight - 2 * dp(WidgetStyle.PILL_PADDING)) * sizeFactor
+        val before = cut()
+        var grow = (room / widest).coerceAtMost(MAX_GROW)
+        while (grow > 1.05f) {
+            scale(1f, grow)
+            measure()
+            // Text doesn't widen exactly in step with its size, so it's measured again at this one.
+            if (before.containsAll(cut()) && widest() <= room) {
+                fitted = Fit(widthMeasureSpec, heightMeasureSpec, 1f, grow)
+                return
+            }
+            grow *= 0.9f
+        }
+        scale(1f, 1f)
+        measure()
+    }
+
+    /** The rows left out for want of room. */
+    private fun cut() = (0 until childCount).map(::getChildAt).filter { it.getTag(R.id.fit_hidden) == true && it.visibility == GONE }
+
+    private fun scale(time: Float, lines: Float) {
+        this.time.setTextSize(TypedValue.COMPLEX_UNIT_PX, timePx * time)
+        date.setTextSize(TypedValue.COMPLEX_UNIT_PX, datePx * lines)
+        detail.setTextSize(TypedValue.COMPLEX_UNIT_PX, detailPx * lines)
+        // A view keeps what it measured for each space it was offered, and text doesn't always
+        // forget it when its size changes: a line kept the width of a larger size tried before
+        // and was cut short.
+        listOf(this.time, date, detail).forEach { it.forceLayout() }
+        spaceRows()
+    }
+
+    /**
+     * Each row's gap is from the row above it, so the first row shown has none. The first row
+     * also starts at the top of its letters, not at the room its line leaves above them for taller
+     * ones: a fifth of its size, which over the time showed as empty space, so the clock's lines
+     * sat low and a short clock left out lines it had room for. The clock's own padding is
+     * the space above and below.
+     */
+    private fun spaceRows() {
+        var first = true
+        for ((row, gap) in listOf(time to 0, date to 4, detail to 5, pills to 12)) {
+            val shadow = if (row === time) -dp(SHADOW_ROOM) else 0
+            (row.layoutParams as LayoutParams).topMargin = shadow + if (first) -headroom(row) else dp(gap)
+            if (row.visibility != GONE || row.getTag(R.id.fit_hidden) == true) first = false
+        }
+        val headroom = headroom(time)
+        if (headroom != timeHeadroom) {
+            timeHeadroom = headroom
+            // Its highlight hugs the digits, inside the room left for the shadow, so it stays within the clock.
+            val below = (time.paint.fontMetrics.descent - digits.bottom).toInt().coerceAtLeast(0)
+            time.foreground = android.graphics.drawable.InsetDrawable(ring,
+                dp(SHADOW_ROOM), dp(SHADOW_ROOM) + headroom, dp(SHADOW_ROOM), dp(SHADOW_ROOM) + below)
+        }
+    }
+
+    /** How far [row]'s line reaches above its tallest digits and capitals (they're the same height). */
+    private fun headroom(row: android.view.View): Int {
+        if (row !is TextView) return 0
+        row.paint.getTextBounds(DIGITS, 0, DIGITS.length, digits)
+        return (digits.top - row.paint.fontMetrics.ascent).toInt().coerceAtLeast(0)
+    }
+
+    /** Shows or hides a row for good; [FitColumn] would otherwise bring back a row it once left out. */
+    private fun show(row: android.view.View, shown: Boolean) {
+        row.visibility = if (shown) VISIBLE else GONE
+        row.setTag(R.id.fit_hidden, null)
     }
 
     override fun onAttachedToWindow() {
@@ -179,7 +266,7 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
         place = lines.place
         date.text = lines.date
         detail.text = lines.detail
-        detail.visibility = if (lines.detail != null) VISIBLE else GONE
+        show(detail, lines.detail != null)
         pills.removeAllViews()
         lines.weather?.let { w ->
             pills.addView(WidgetStyle.pill(context, WeatherArt.icon(w.sky, w.night), "${w.temperature}°  ${w.description}", pillPx).apply {
@@ -193,7 +280,8 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
                 setOnClickListener { onTap?.invoke(item, place) }
             })
         }
-        pills.visibility = if (pills.childCount > 0) VISIBLE else GONE
+        show(pills, pills.childCount > 0)
+        spaceRows()
         fitted = null
     }
 
@@ -205,11 +293,12 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
         }
         sizedFor = 0
         fitted = null
-        time.visibility = if (options.showTime) VISIBLE else GONE
-        date.visibility = if (options.showDate) VISIBLE else GONE
+        show(time, options.showTime)
+        show(date, options.showDate)
         val horizontal = if (options.alignStart) Gravity.START else Gravity.CENTER_HORIZONTAL
         gravity = horizontal or Gravity.CENTER_VERTICAL
-        setPadding(dp(if (options.alignStart) 20 else 12), 0, dp(12), 0)
+        // Above and below, the pills' own padding: their words and the time's digits sit as far from the edges.
+        setPadding(dp(if (options.alignStart) 20 else 12), dp(WidgetStyle.PILL_PADDING), dp(12), dp(WidgetStyle.PILL_PADDING))
         (time.layoutParams as LayoutParams).gravity = horizontal
         (date.layoutParams as LayoutParams).gravity = horizontal
         (detail.layoutParams as LayoutParams).gravity = horizontal
@@ -229,8 +318,8 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
         fitted = null
         val unit = width / 100f * sizeFactor
         timePx = 23f * unit
-        date.setTextSize(TypedValue.COMPLEX_UNIT_PX, 5.6f * unit)
-        detail.setTextSize(TypedValue.COMPLEX_UNIT_PX, 4.6f * unit)
+        datePx = 5.6f * unit
+        detailPx = 4.6f * unit
         pillPx = 4.2f * unit
         for (i in 0 until pills.childCount) (pills.getChildAt(i) as? TextView)?.let { WidgetStyle.sizePill(it, pillPx) }
     }
@@ -240,6 +329,10 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
 
 /** Padding around the clock's time so its shadow isn't clipped. */
 private const val SHADOW_ROOM = 12
+/** What the time can show, for the height of its digits. */
+private const val DIGITS = "0123456789"
+/** How much larger the date can get with the time hidden, so a short line doesn't loom. */
+private const val MAX_GROW = 2f
 
 data class ClockOptions(val size: Size, val alignStart: Boolean, val showDate: Boolean, val showTime: Boolean = true) {
     enum class Size(val label: String) { SMALL("Small"), MEDIUM("Medium"), LARGE("Large") }

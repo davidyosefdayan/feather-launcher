@@ -20,6 +20,8 @@ object WidgetStyle {
     const val SOFT_WHITE = 0xD9FFFFFF.toInt()
     /** A card's corners, as Android's own widgets have them. */
     const val RADIUS = 28
+    /** Room around a pill's icon and words, for a touch and its highlight. */
+    const val PILL_PADDING = 4
 
     /** The home screen's colors, from the wallpaper; set by [HomeScreen]. */
     var palette: () -> Palette? = { null }
@@ -78,7 +80,7 @@ object WidgetStyle {
         gravity = Gravity.CENTER_VERTICAL
         foreground = Ui.pressable(ctx, Ui.RADIUS_PILL, focusColor = WHITE)
         setCompoundDrawablesRelative(icon?.mutate(), null, null, null)
-        setPadding(dp(4), dp(4), dp(4), dp(4))
+        setPadding(dp(PILL_PADDING), dp(PILL_PADDING), dp(PILL_PADDING), dp(PILL_PADDING))
         sizePill(this, px)
     }
 
