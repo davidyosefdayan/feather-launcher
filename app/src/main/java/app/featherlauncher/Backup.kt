@@ -1,7 +1,5 @@
 package app.featherlauncher
 
-import android.app.AlarmManager
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.util.Base64
@@ -92,16 +90,34 @@ object Backup {
             val data = files.optString(name).takeIf { it.isNotEmpty() }
             if (data == null) file.delete() else file.writeBytes(Base64.decode(data, Base64.NO_WRAP))
         }
+        dropWidgets(File(context.filesDir, "workspace.json"))
         // The wallpaper pair is applied again for the current mode.
         context.getSharedPreferences("launcher", Context.MODE_PRIVATE).edit().remove("pair_applied").commit()
         restart(context)
     }
 
-    /** Starts the launcher again from scratch, so nothing restored is shadowed by what's in memory. */
+    /**
+     * Other apps' widgets on the home screen are left out: their numbers belong to the install
+     * that added them, so here they'd leave empty gaps, and a widget added later could get one of
+     * those numbers and turn up in the old spot.
+     */
+    private fun dropWidgets(file: File) = runCatching {
+        val json = JSONObject(file.readText())
+        val items = json.getJSONArray("items")
+        val kept = JSONArray()
+        for (i in 0 until items.length()) items.getJSONObject(i).let { if (it.optString("type") != "WIDGET") kept.put(it) }
+        file.writeText(json.put("items", kept).toString())
+    }
+
+    /**
+     * Starts the launcher again from scratch, so nothing restored is shadowed by what's in memory.
+     * It's asked for while the launcher is still on screen: Android doesn't let an app that's
+     * gone open itself again, so a restart scheduled for later never came back unless it was the
+     * home app.
+     */
     private fun restart(context: Context) {
-        val intent = Intent(context, HomeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        val pending = PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_CANCEL_CURRENT)
-        context.getSystemService(AlarmManager::class.java).set(AlarmManager.RTC, System.currentTimeMillis() + 400, pending)
+        context.startActivity(Intent(context, HomeActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
         android.os.Process.killProcess(android.os.Process.myPid())
     }
 
