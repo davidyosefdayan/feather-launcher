@@ -84,7 +84,7 @@ Test builds of branches and pull requests go to Feather Dev, never over the real
 
 To copy your setup into Feather Dev, use **Settings → Backup and restore**: save a backup in Feather, then restore it in Feather Dev (or the other way round). To switch which one is your home screen, use **Settings → Default home app** in either one, or your phone's Settings → Apps → Default apps → Home app.
 
-**Betas:** every merge to `main` builds the real Feather as the [beta](https://github.com/davidyosefdayan/feather-launcher/releases/tag/beta) pre-release, replacing the one before. It installs over Feather, and the next release updates it as usual.
+**Betas:** every merge to `main` builds the real Feather as the [beta](https://github.com/davidyosefdayan/feather-launcher/releases/tag/beta) pre-release, replacing the one before. It installs over Feather, and the next release updates it as usual. To get each new beta through the app's updater, turn on **Settings → Updates → Get beta updates** (on by itself once a beta is installed); turned off, it waits for the next release.
 
 ### Updates
 

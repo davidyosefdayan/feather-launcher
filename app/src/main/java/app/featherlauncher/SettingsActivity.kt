@@ -601,7 +601,7 @@ class SettingsActivity : Activity() {
                 setPadding(dp(Ui.SPACE_XL), 0, dp(Ui.SPACE_XL), dp(Ui.SPACE_M))
             })
             column.addView(status)
-            column.addView(Components.row(this, p, R.drawable.ic_refresh, "Check for updates", color = p.accent) {
+            fun check() {
                 say("Checking…")
                 updates.check { ok ->
                     when {
@@ -614,7 +614,14 @@ class SettingsActivity : Activity() {
                         }
                     }
                 }
+            }
+            column.addView(Components.row(this, p, R.drawable.ic_refresh, "Check for updates", color = p.accent) { check() })
+            column.addView(Components.toggleRow(this, p, R.drawable.ic_set_code, "Get beta updates", updates.betas) {
+                updates.betas = it
+                check()
             })
+            column.addView(Components.footnote(this, p,
+                "Betas are test builds of what's coming next, made after every change. They can have bugs."))
             overlays.showSheet("Updates", column)
             return
         }
