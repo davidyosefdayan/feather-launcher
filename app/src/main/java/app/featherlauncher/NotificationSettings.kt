@@ -52,6 +52,7 @@ class NotificationSettings(private val s: SettingsActivity) {
 
     private fun edit(filter: NotificationFilter, isNew: Boolean) {
         s.filterDraft = filter
+        s.filterOriginal = filter
         s.filterIsNew = isNew
         s.open(SettingsActivity.Page.FILTER)
     }
@@ -71,7 +72,12 @@ class NotificationSettings(private val s: SettingsActivity) {
     }
 
     private fun appName(pkg: String?) =
-        if (pkg == null) "All apps" else s.repo.apps.firstOrNull { it.packageName == pkg }?.label ?: pkg
+        if (pkg == null) "All apps" else s.repo.apps.firstOrNull { it.packageName == pkg }?.label ?: systemLabel(pkg)
+
+    /** The name of something that isn't in the app list, such as the Android system itself. */
+    private fun systemLabel(pkg: String) = runCatching {
+        s.packageManager.getApplicationLabel(s.packageManager.getApplicationInfo(pkg, 0)).toString()
+    }.getOrDefault(pkg)
 
     // region Filter
 
@@ -90,7 +96,8 @@ class NotificationSettings(private val s: SettingsActivity) {
             },
             Components.row(s, p, R.drawable.ic_message, "Words or phrases",
                 subtitle = if (f.words.isEmpty()) "Any notification" else f.words.joinToString(", "), chevron = true, inset = Ui.SPACE_L) {
-                s.overlays.showInputAllowingEmpty("Words or phrases", f.words.joinToString(", "), "sale, promo code") {
+                // Kept however the sheet is closed: clearing the words and swiping it away means no words.
+                s.overlays.showInputAllowingEmpty("Words or phrases", f.words.joinToString(", "), "sale, promo code", saveOnClose = true) {
                     update(f.copy(words = NotificationFilter.parseWords(it)))
                 }
             },
@@ -143,6 +150,8 @@ class NotificationSettings(private val s: SettingsActivity) {
                     return@pillButton
                 }
                 store.put(s.filterDraft ?: f)
+                // What's already showing is hidden too, not only what comes next.
+                NotificationService.refilter()
                 s.filterDraft = null
                 s.open(SettingsActivity.Page.NOTIFICATIONS)
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, s.dp(48)))
@@ -177,12 +186,26 @@ class NotificationSettings(private val s: SettingsActivity) {
 
     private fun limitName(id: Long): String? = AppLimits.get(s).find(id)?.name
 
+    /**
+     * Apps to filter: the app list's, and anything else with a notification showing or hidden
+     * before, such as the Android system, whose notifications (a security warning that names
+     * a filtering service, say) don't come from an app with an icon.
+     */
     private fun pickApp(current: String?, onPick: (String?) -> Unit) {
-        val apps = s.visibleApps.distinctBy { it.packageName }.sortedBy { it.label.lowercase() }
-        val options = listOf("All apps" to null) + apps.map { e -> e.label to ImageView(s).apply { setImageBitmap(s.repo.icon(e)) } }
-        val selected = if (current == null) 0 else apps.indexOfFirst { it.packageName == current } + 1
+        val apps = s.visibleApps.distinctBy { it.packageName }.map { it.packageName to it.label }
+        val listed = apps.map { it.first }.toSet()
+        val others = (NotificationService.showingFrom() + store.history.map { it.app } + listOfNotNull(current))
+            .filter { it !in listed && it != s.packageName }.distinct().map { it to systemLabel(it) }
+        val all = (apps + others).sortedBy { it.second.lowercase() }
+        val options = listOf("All apps" to null) + all.map { (pkg, label) ->
+            label to ImageView(s).apply {
+                val entry = s.repo.apps.firstOrNull { it.packageName == pkg }
+                if (entry != null) setImageBitmap(s.repo.icon(entry)) else runCatching { setImageDrawable(s.packageManager.getApplicationIcon(pkg)) }
+            }
+        }
+        val selected = if (current == null) 0 else all.indexOfFirst { it.first == current } + 1
         Components.choiceSheet(s, s.palette, s.overlays, "App", options, selected) { i ->
-            onPick(if (i == 0) null else apps[i - 1].packageName)
+            onPick(if (i == 0) null else all[i - 1].first)
         }
     }
 

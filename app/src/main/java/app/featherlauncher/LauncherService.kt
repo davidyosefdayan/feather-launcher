@@ -34,6 +34,8 @@ class LauncherService : AccessibilityService() {
             check()
             WeatherWallpaper.refresh(context)
             if (intent.action == Intent.ACTION_SCREEN_ON) Shuffle.next(context, screenOn = true)
+            // Filters catch any permanent notification that came back while the phone slept.
+            NotificationService.refilter()
         }
     }
 
