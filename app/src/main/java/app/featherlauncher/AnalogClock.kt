@@ -7,32 +7,20 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RadialGradient
 import android.graphics.Shader
-import android.util.TypedValue
-import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
 import java.util.Calendar
 
 /**
- * The time on a clock face: a soft round face with twelve marks and no numbers, slim hands and a
- * fine second hand, with the same line about the day as the digital clock under it. Solid, on a
- * card with the face in the accent's soft tone; Transparent, a glass face on the wallpaper.
+ * The time on a clock face, and nothing else: a soft round face with twelve marks and no numbers,
+ * slim hands and a fine second hand. Solid, on a card with the face in the accent's soft tone;
+ * Transparent, a glass face on the wallpaper. The date and the rest are the digital clock's.
  */
 @SuppressLint("ViewConstructor")
 class AnalogClockWidget(context: Context, val item: HomeItem) : FrameLayout(context) {
     private val face = Face(context)
-    /** "Sun, Nov 1 · 10 Cheshvan · Lech Lecha", over two lines if it must. */
-    private val day = WidgetStyle.text(context, 15f, WidgetStyle.body).apply {
-        maxLines = 2
-        gravity = Gravity.CENTER
-    }
-    private val glance = Glance(context)
     var solid = false
         private set
-
-    private val tick = object : android.content.BroadcastReceiver() {
-        override fun onReceive(c: Context, intent: android.content.Intent) = refresh()
-    }
 
     // Holding anywhere picks it up, as on the other widgets ([WholeHold]).
     private val hold = WholeHold(this)
@@ -43,10 +31,7 @@ class AnalogClockWidget(context: Context, val item: HomeItem) : FrameLayout(cont
 
     init {
         isFocusable = true
-        clipChildren = false
-        clipToPadding = false
         addView(face)
-        addView(day)
         setSolid(false)
     }
 
@@ -56,68 +41,25 @@ class AnalogClockWidget(context: Context, val item: HomeItem) : FrameLayout(cont
         background = if (solid) android.graphics.drawable.InsetDrawable(WidgetStyle.cardBackground(context), dp(CardWidget.GAP)) else null
         val edge = dp(CardWidget.GAP + EDGE)
         setPadding(edge, edge, edge, edge)
-        day.setTextColor(if (solid) WidgetStyle.onCard() else WidgetStyle.WHITE)
-        if (solid) day.setShadowLayer(0f, 0f, 0f, 0) else day.setShadowLayer(dp(6).toFloat(), 0f, dp(1).toFloat(), 0x59000000)
         face.invalidate()
-        requestLayout()
     }
 
-    /** Works out the line about the day again; runs every minute. */
-    fun refresh() {
-        val lines = glance.lines(System.currentTimeMillis()) { if (isAttachedToWindow) refresh() }
-        // Each part stays whole: a long line breaks only between them.
-        day.text = (listOf(lines.date) + lines.detail?.split(" · ").orEmpty()).joinToString(" · ") { it.replace(' ', ' ') }
-        face.invalidate()
-        requestLayout()
-    }
+    /** Draws the hands again (they also move on their own each second while on screen). */
+    fun refresh() = face.invalidate()
 
-    /**
-     * The face as large as the room allows, with the line about the day under it; in a space too
-     * short for both, the line goes and the face takes its room.
-     */
+    /** The face as large as the room allows, in the middle. */
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val height = if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) width else MeasureSpec.getSize(heightMeasureSpec)
         setMeasuredDimension(width, height)
-        val inner = width - paddingLeft - paddingRight
-        val tall = height - paddingTop - paddingBottom
-        // The line about the day takes the same share of the screen on every phone, and stays easy to read.
-        val least = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 12f, resources.displayMetrics)
-        val most = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 16f, resources.displayMetrics)
-        day.setTextSize(TypedValue.COMPLEX_UNIT_PX, (inner * 0.075f).coerceIn(least, most))
-        day.measure(MeasureSpec.makeMeasureSpec(inner, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
-        val withDay = minOf(inner, tall - day.measuredHeight - dp(GAP))
-        val alone = minOf(inner, tall)
-        // The line stays unless keeping it would make the face much smaller than without it.
-        day.visibility = if (day.text.isNotEmpty() && withDay >= alone * KEEP) VISIBLE else GONE
-        val size = (if (day.visibility == VISIBLE) withDay else alone).coerceAtLeast(0)
+        val size = minOf(width - paddingLeft - paddingRight, height - paddingTop - paddingBottom).coerceAtLeast(0)
         face.measure(MeasureSpec.makeMeasureSpec(size, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(size, MeasureSpec.EXACTLY))
     }
 
-    /** The face and the line under it, together in the middle. */
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        val shown = day.visibility == VISIBLE
-        val used = face.measuredHeight + if (shown) dp(GAP) + day.measuredHeight else 0
-        var top = paddingTop + (b - t - paddingTop - paddingBottom - used) / 2
-        val middle = (r - l) / 2
-        face.layout(middle - face.measuredWidth / 2, top, middle + face.measuredWidth / 2, top + face.measuredHeight)
-        top += face.measuredHeight + dp(GAP)
-        if (shown) day.layout(middle - day.measuredWidth / 2, top, middle + day.measuredWidth / 2, top + day.measuredHeight)
-    }
-
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        context.registerReceiver(tick, android.content.IntentFilter().apply {
-            addAction(android.content.Intent.ACTION_TIME_TICK)
-            addAction(android.content.Intent.ACTION_TIME_CHANGED)
-            addAction(android.content.Intent.ACTION_TIMEZONE_CHANGED)
-        })
-        refresh()
-    }
-
-    override fun onDetachedFromWindow() {
-        runCatching { context.unregisterReceiver(tick) }
-        super.onDetachedFromWindow()
+        val left = (r - l - face.measuredWidth) / 2
+        val top = (b - t - face.measuredHeight) / 2
+        face.layout(left, top, left + face.measuredWidth, top + face.measuredHeight)
     }
 
     private fun dp(value: Int) = Ui.dp(context, value)
@@ -228,11 +170,7 @@ class AnalogClockWidget(context: Context, val item: HomeItem) : FrameLayout(cont
     }
 
     private companion object {
-        /** The room (dp) between the clock's card and what's on it, as on the digital clock. */
+        /** The room (dp) between the clock's card and its face. */
         const val EDGE = 16
-        /** Between the face and the line under it. */
-        const val GAP = 10
-        /** The line stays unless the face would then be less than this share of its size without it. */
-        const val KEEP = 0.72f
     }
 }
