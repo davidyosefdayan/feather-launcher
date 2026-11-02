@@ -59,6 +59,8 @@ class AppRepository(private val context: Context, shape: IconShape) {
         icons = priorityKeys.mapNotNull { key -> decodeIcon(key)?.let { key to it } }.toMap()
         iconsDir = iconDir
         io.execute {
+            // Icons drawn by an older version of the shapes are never read again.
+            File(context.filesDir, "icons").listFiles()?.filter { !it.name.contains("_r$SHAPE_VERSION") }?.forEach { it.deleteRecursively() }
             val dir = iconDir
             val cached = apps.mapNotNull { e -> (icons[e.key] ?: decodeIcon(e.key, dir))?.let { e.key to it } }.toMap()
             main.post {
@@ -108,7 +110,8 @@ class AppRepository(private val context: Context, shape: IconShape) {
             IconLook.DARK -> "_dark$LOOK_VERSION"
             IconLook.TINTED -> "_tint${LOOK_VERSION}_%06x".format(tint and 0xFFFFFF)
         }
-        return File(context.filesDir, "icons/${shape.name.lowercase()}$variant").apply { mkdirs() }
+        // Versioned too, so icons cut out by an older version are drawn again.
+        return File(context.filesDir, "icons/${shape.name.lowercase()}_r$SHAPE_VERSION$variant").apply { mkdirs() }
     }
 
     fun refresh() {
@@ -233,6 +236,8 @@ class AppRepository(private val context: Context, shape: IconShape) {
     private companion object {
         /** Bump when dark or tinted icons are drawn differently. */
         const val LOOK_VERSION = 30
+        /** Raised when the way icons are cut to their shape changes. */
+        const val SHAPE_VERSION = 2
         const val DATED_ICONS = "com.google.android.calendar.dynamic_icons"
     }
 }
