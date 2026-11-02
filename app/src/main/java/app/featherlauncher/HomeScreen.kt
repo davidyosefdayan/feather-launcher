@@ -205,13 +205,16 @@ class HomeScreen(
 
     fun onAppsChanged() {
         fillDefaultDock()
-        // Drop apps that were uninstalled (only once the app list is known).
+        // Drop apps that were uninstalled (only once the app list is known), and hidden apps,
+        // which are never on the home screen.
         if (repo.apps.isNotEmpty()) {
-            workspace.items.filter { it.type == HomeItem.Type.FOLDER }.forEach { folder ->
-                folder.apps.filter { repo.find(it) == null }.forEach { removeFromFolder(folder, it) }
+            fun gone(key: String) = repo.find(key) == null || key in prefs.hidden
+            val inFolders = workspace.items.filter { it.type == HomeItem.Type.FOLDER }.flatMap { folder ->
+                folder.apps.filter(::gone).map { folder to it }
             }
-            val gone = workspace.items.filter { it.type == HomeItem.Type.APP && repo.find(it.ref) == null }
-            if (gone.isNotEmpty()) {
+            inFolders.forEach { (folder, key) -> removeFromFolder(folder, key) }
+            val gone = workspace.items.filter { it.type == HomeItem.Type.APP && gone(it.ref) }
+            if (gone.isNotEmpty() || inFolders.isNotEmpty()) {
                 workspace.items.removeAll(gone)
                 gone.forEach { views.remove(it.id)?.let { v -> (v.parent as? ViewGroup)?.removeView(v) } }
                 workspace.removeEmptyPages()

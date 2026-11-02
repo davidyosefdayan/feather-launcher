@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- MingCute icon (arrow-right.svg), Apache License 2.0. -->
+<!-- Backspace, drawn to match the MingCute line icons. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
     <path
-        android:pathData="M4 12h15m-5 5.657L19.657 12 14 6.343"
+        android:pathData="M9 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6-7Zm3.5 4.5 5 5m0-5-5 5"
         android:strokeColor="#FFFFFFFF"
         android:strokeWidth="2"
         android:strokeLineCap="round"

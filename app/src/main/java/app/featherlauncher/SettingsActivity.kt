@@ -125,7 +125,7 @@ class SettingsActivity : Activity() {
         setContentView(root)
 
         // Newer Android sends Back here instead of as a key press.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { if (!overlays.dismiss()) back() }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { onBack() }
         root.setOnApplyWindowInsetsListener { _, windowInsets ->
             val bars = windowInsets.getInsets(WindowInsets.Type.systemBars())
             val next = Rect(bars.left, bars.top, bars.right, bars.bottom)
@@ -247,6 +247,12 @@ class SettingsActivity : Activity() {
         })
     }
 
+    /** Back: takes a digit off the PIN pad, or closes what's open, or goes back a page. */
+    private fun onBack() {
+        if (PinPad.active?.takeIf { overlays.isShowing }?.back() == true) return
+        if (!overlays.dismiss()) back()
+    }
+
     private fun back() {
         if (openedDirectly && current != Page.SHORTCUT && current != Page.FILTER) return finish()
         when (current) {
@@ -351,7 +357,7 @@ class SettingsActivity : Activity() {
 
     private fun pageRow(p: Palette, icon: Int, page: Page, summary: String) =
         Components.row(this, p, icon, page.title, subtitle = summary, chevron = true, inset = Ui.SPACE_L) {
-            if (page == Page.HIDDEN && prefs.hiddenPin != null) PinPad.ask(this, palette, overlays, prefs.hiddenPin!!) { open(page) }
+            if (page == Page.HIDDEN && prefs.hiddenPin != null) PinPad.ask(this, palette, overlays, prefs.hiddenPin!!, "To change hidden apps") { open(page) }
             else open(page)
         }
 
@@ -536,7 +542,7 @@ class SettingsActivity : Activity() {
                 chevron = true, inset = Ui.SPACE_L) { pinOptions() },
         )))
         content.addView(Components.footnote(this, p, "A PIN is required to open Hidden apps or these settings."))
-        val apps = repo.apps.filter { it.key in prefs.hidden }.sortedBy { it.label.lowercase() }
+        val apps = Categories(this).sorted(Categories.HIDDEN, repo.apps.filter { it.key in prefs.hidden })
         content.addView(heading(p, "Hidden apps"))
         content.addView(spacer())
         if (apps.isEmpty()) {
@@ -748,7 +754,7 @@ class SettingsActivity : Activity() {
     private fun pinOptions() {
         val pin = prefs.hiddenPin
         val setNew = {
-            PinPad.create(this, palette, overlays) {
+            PinPad.create(this, palette, overlays, "To open hidden apps") {
                 prefs.hiddenPin = PinPad.hash(it)
                 build()
                 Toast.makeText(this, "PIN set for hidden apps", Toast.LENGTH_SHORT).show()
@@ -760,12 +766,12 @@ class SettingsActivity : Activity() {
             setPadding(0, 0, 0, dp(Ui.SPACE_M))
             addView(Components.row(this@SettingsActivity, palette, R.drawable.ic_edit, "Change PIN") {
                 overlays.dismiss()
-                root.postDelayed({ PinPad.ask(this@SettingsActivity, palette, overlays, pin) { root.postDelayed(setNew, 160) } }, 160)
+                root.postDelayed({ PinPad.ask(this@SettingsActivity, palette, overlays, pin, "To change your PIN") { root.postDelayed(setNew, 160) } }, 160)
             })
             addView(Components.row(this@SettingsActivity, palette, R.drawable.ic_close, "Turn off PIN", color = palette.danger) {
                 overlays.dismiss()
                 root.postDelayed({
-                    PinPad.ask(this@SettingsActivity, palette, overlays, pin) {
+                    PinPad.ask(this@SettingsActivity, palette, overlays, pin, "To turn off the PIN") {
                         prefs.hiddenPin = null
                         build()
                     }
@@ -797,18 +803,15 @@ class SettingsActivity : Activity() {
         PinPad.active?.takeIf { overlays.isShowing }?.let { pad ->
             val k = event.keyCode
             val digit = if (k in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) k - KeyEvent.KEYCODE_0 else null
-            val handled = digit != null || k == KeyEvent.KEYCODE_DEL || k == KeyEvent.KEYCODE_DPAD_CENTER || k == KeyEvent.KEYCODE_ENTER
-            if (handled) {
-                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) when {
-                    digit != null -> pad.type('0' + digit)
-                    k == KeyEvent.KEYCODE_DEL -> pad.delete()
-                    else -> pad.confirm()
+            if (digit != null || k == KeyEvent.KEYCODE_DEL) {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    if (digit != null) { if (event.repeatCount == 0) pad.type('0' + digit) } else pad.delete()
                 }
                 return true
             }
         }
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {
-            if (event.action == KeyEvent.ACTION_UP && !overlays.dismiss()) back()
+            if (event.action == KeyEvent.ACTION_UP) onBack()
             return true
         }
         return super.dispatchKeyEvent(event)
