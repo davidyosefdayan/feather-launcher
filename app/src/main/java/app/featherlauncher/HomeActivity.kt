@@ -1331,14 +1331,16 @@ class HomeActivity : Activity(), HomeScreen.Host {
                     view.translationY = (slot.top - start.top).toFloat()
                 }
             }
-            // Well inside a slot (its middle 60%), so the edge between two never flips back and forth.
-            val target = slots.indexOfFirst { r ->
-                val dx = r.width() * 0.2f
-                val dy = r.height() * 0.2f
-                x > r.left + dx && x < r.right - dx && y > r.top + dy && y < r.bottom - dy
-            }
+            // The slot nearest the finger, so it follows anywhere on the page; anywhere after the last
+            // app, it goes last. It moves only once that slot is clearly nearer than the one it's in, so
+            // the edge between two never flips back and forth.
+            fun distance(r: android.graphics.Rect) = kotlin.math.hypot(x - r.exactCenterX(), y - r.exactCenterY())
             val from = current.indexOf(app.key)
-            if (target < 0 || target == from) return
+            val last = slots.lastOrNull() ?: return
+            val pastEnd = y > last.bottom || (y > last.top && x > last.right)
+            val target = if (pastEnd) slots.lastIndex else slots.indices.minBy { distance(slots[it]) }
+            if (target == from || from !in slots.indices) return
+            if (!pastEnd && distance(slots[target]) > distance(slots[from]) - slots[from].width() * 0.15f) return
             current.add(target, current.removeAt(from))
             current.forEachIndexed { i, key ->
                 val view = views[key] ?: return@forEachIndexed
