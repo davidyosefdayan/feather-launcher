@@ -1312,7 +1312,7 @@ class HomeScreen(
         private fun folderCandidate(page: Int, col: Int, row: Int, view: View): HomeItem? {
             if (source?.item?.type == HomeItem.Type.FOLDER) return null
             val occupant = workspace.on(page).firstOrNull {
-                it.x == col && it.y == row && it !== source?.item && it !== source?.folder && it !in shifted.keys &&
+                it.x == col && it.y == row && it !== source?.item && it !== source?.folder && it !in shifted.keys && it !== bumped?.first &&
                     (it.type == HomeItem.Type.APP || it.type == HomeItem.Type.FOLDER)
             } ?: return null
             val cells = containerFor(page)
@@ -1380,7 +1380,14 @@ class HomeScreen(
             val plan = if (w == 1 && h == 1) planReorder(page, x, y) else planWidgetReorder(page, x, y)
             when (plan) {
                 null -> {
-                    // No way to make room here (a widget, or a full page): use the closest free spot.
+                    // A full page: everything slides along and the last app goes on to the next page.
+                    val overflow = if (w == 1 && h == 1) planOverflow(page, x, y) else null
+                    if (overflow != null) {
+                        setShifted(overflow.first, overflow.second)
+                        setTarget(Triple(page, x, y))
+                        return
+                    }
+                    // No way to make room here (a widget in the way): use the closest free spot.
                     setShifted(emptyMap())
                     val spot = workspace.nearestSpot(page, x, y, w, h, source?.item)
                     setTarget(spot?.let { Triple(page, it.first, it.second) })
@@ -1391,6 +1398,34 @@ class HomeScreen(
                 }
             }
         }
+
+        /**
+         * On a full page, as on iOS: the app at ([cx], [cy]) and every app after it in reading
+         * order slide along one place (past widgets), and the last one goes on to the next page
+         * with room, or a new one after the last. The slides, and the app leaving with where it
+         * goes. Null when a widget is in the way.
+         */
+        private fun planOverflow(page: Int, cx: Int, cy: Int): Pair<Map<HomeItem, Pair<Int, Int>>, Pair<HomeItem, Triple<Int, Int, Int>>>? {
+            val dragged = source?.item
+            val others = workspace.on(page).filter { it !== dragged }
+            fun at(x: Int, y: Int) = others.firstOrNull { x >= it.x && x < it.x + it.w && y >= it.y && y < it.y + it.h }
+            var moving = at(cx, cy)?.takeIf { it.w == 1 && it.h == 1 } ?: return null
+            val cols = workspace.cols(page)
+            val plan = LinkedHashMap<HomeItem, Pair<Int, Int>>()
+            for (i in cy * cols + cx + 1 until workspace.rows(page) * cols) {
+                val next = at(i % cols, i / cols)?.takeIf { it.w == 1 && it.h == 1 } ?: continue
+                plan[moving] = next.x to next.y
+                moving = next
+            }
+            // Where the dragged app came from counts as room: it's leaving.
+            val to = (page + 1 until workspace.pageCount).firstNotNullOfOrNull { p ->
+                workspace.nearestSpot(p, 0, 0, 1, 1, dragged)?.let { Triple(p, it.first, it.second) }
+            } ?: Triple(workspace.pageCount, 0, 0)
+            return plan to (moving to to)
+        }
+
+        /** The app going on to another page, with where it goes there. Nothing is saved until drop. */
+        private var bumped: Pair<HomeItem, Triple<Int, Int, Int>>? = null
 
         /**
          * Which icons move where so a dragged app fits at ([cx], [cy]). The icon in the way
@@ -1466,20 +1501,31 @@ class HomeScreen(
             return plan
         }
 
-        /** Slides icons to their temporary cells (and others back home). Nothing is saved until drop. */
-        private fun setShifted(next: Map<HomeItem, Pair<Int, Int>>) {
-            (shifted.keys - next.keys).forEach { item ->
-                views[item.id]?.animate()?.translationX(0f)?.translationY(0f)?.setDuration(180)?.start()
+        /**
+         * Slides icons to their temporary cells, [leaving] off the page's edge toward the page it's
+         * going to, and others back home. Nothing is saved until drop.
+         */
+        private fun setShifted(next: Map<HomeItem, Pair<Int, Int>>, leaving: Pair<HomeItem, Triple<Int, Int, Int>>? = null) {
+            val gone = leaving?.first
+            (shifted.keys + listOfNotNull(bumped?.first) - next.keys - setOfNotNull(gone)).forEach { item ->
+                views[item.id]?.animate()?.translationX(0f)?.translationY(0f)?.alpha(1f)?.setDuration(180)?.start()
             }
             next.forEach { (item, cell) ->
                 val view = views[item.id] ?: return@forEach
                 val cells = containerFor(item.page)
                 val from = cells.cellRect(Rect(item.x, item.y, item.x + 1, item.y + 1))
                 val to = cells.cellRect(Rect(cell.first, cell.second, cell.first + 1, cell.second + 1))
-                view.animate().translationX((to.left - from.left).toFloat()).translationY((to.top - from.top).toFloat())
+                view.animate().translationX((to.left - from.left).toFloat()).translationY((to.top - from.top).toFloat()).alpha(1f)
                     .setDuration(180).setInterpolator(DecelerateInterpolator(2f)).start()
             }
+            if (gone != null && gone !== bumped?.first) views[gone.id]?.let { view ->
+                // Out past the page's edge, as if into the next page.
+                val past = (view.parent as View).width - view.left
+                view.animate().translationX(past.toFloat()).translationY(0f).alpha(0f).setDuration(240)
+                    .setInterpolator(DecelerateInterpolator(2f)).start()
+            }
             shifted = next
+            bumped = leaving
         }
 
         private fun clearReorder(commit: Boolean) {
@@ -1492,6 +1538,19 @@ class HomeScreen(
                     views[item.id]?.apply { animate().cancel(); translationX = 0f; translationY = 0f }
                 }
                 shifted = emptyMap()
+                bumped?.let { (item, place) ->
+                    // Every page was full: it starts a new one.
+                    if (place.first >= workspace.pageCount) {
+                        workspace.addPage()
+                        pages.addView(newPage())
+                        dots.count = workspace.pageCount
+                    }
+                    item.page = place.first
+                    item.x = place.second
+                    item.y = place.third
+                    views[item.id]?.apply { animate().cancel(); translationX = 0f; translationY = 0f; alpha = 1f }
+                }
+                bumped = null
             } else {
                 setShifted(emptyMap())
             }
