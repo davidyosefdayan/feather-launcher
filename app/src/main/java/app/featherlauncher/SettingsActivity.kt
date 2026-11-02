@@ -55,9 +55,10 @@ class SettingsActivity : Activity() {
     internal var keyCapture: ((List<Int>) -> Unit)? = null
         set(value) {
             field = value
-            // Android hands Back to back handlers, not as a key; while a key is being chosen, this
-            // one takes it so Back can be chosen too (on a phone without a power button, double
-            // pressing it can lock the screen). Older Android sends Back as a key, caught below.
+            // Android 16 and newer hand Back to back handlers, not as a key; while a key is being
+            // chosen, this one takes it so Back can be chosen too (on a phone without a power
+            // button, double pressing it can lock the screen). Older Android sends Back as a key,
+            // caught below.
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
             if (value != null) onBackInvokedDispatcher.registerOnBackInvokedCallback(
                 android.window.OnBackInvokedDispatcher.PRIORITY_OVERLAY, captureBack)
@@ -781,8 +782,8 @@ class SettingsActivity : Activity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        val backIsKey = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
-        keyCapture?.takeIf { overlays.isShowing && (event.keyCode != KeyEvent.KEYCODE_BACK || backIsKey) || captured.isNotEmpty() }?.let { capture ->
+        // Back too: up to Android 15 it comes as a key (16 and newer give it to captureBack instead).
+        keyCapture?.takeIf { overlays.isShowing || captured.isNotEmpty() }?.let { capture ->
             // Decided when the first key comes back up, so a second key pressed with it counts too.
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && event.keyCode !in captured && captured.size < 2) {
                 captured += event.keyCode
