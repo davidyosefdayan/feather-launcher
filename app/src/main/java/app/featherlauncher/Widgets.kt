@@ -36,12 +36,17 @@ class Widgets(
     /** The home screen's grid, for working out how many cells a widget needs. */
     private val grid: () -> CellLayout.Grid,
 ) {
-    /** A widget was bound (and set up, if it needed it) and should be placed on the home screen. */
-    var onAdded: ((appWidgetId: Int, spanX: Int, spanY: Int) -> Unit)? = null
+    /**
+     * A widget was bound (and set up, if it needed it) and should be placed on the home screen:
+     * where it was dropped ([at]: page, column, row) if it was dragged there, else anywhere.
+     */
+    var onAdded: ((appWidgetId: Int, spanX: Int, spanY: Int, at: Triple<Int, Int, Int>?) -> Unit)? = null
     /** One of Feather's own widgets was picked. */
     var onFeatherPicked: ((FeatherKind) -> Unit)? = null
     /** One of Feather's own widgets was held, to be dragged onto a page; the view is its preview. */
     var onFeatherHeld: ((FeatherKind, View) -> Unit)? = null
+    /** Another app's widget was held, to be dragged onto a page; the view is its preview, the sizes its cells. */
+    var onWidgetHeld: ((AppWidgetProviderInfo, View, Int, Int) -> Unit)? = null
 
     private val manager = AppWidgetManager.getInstance(activity)
     private val density = activity.resources.displayMetrics.density
@@ -52,6 +57,8 @@ class Widgets(
     private val previews = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private var pendingId = AppWidgetManager.INVALID_APPWIDGET_ID
+    /** Where the widget being added was dropped, if it was dragged onto a page. */
+    private var pendingSpot: Triple<Int, Int, Int>? = null
 
     fun startListening() = host.startListening()
     fun stopListening() = host.stopListening()
@@ -128,11 +135,16 @@ class Widgets(
 
     // region Picker
 
-    /** Opens the widget picker: Feather's own widgets first, then widgets grouped by app, each with its preview. */
+    /**
+     * Opens the widget picker: a search field, then Feather's own widgets, then widgets grouped
+     * by app, each with its preview. Searching matches a widget's name and its app's.
+     */
     fun pick() {
-        val rows = ArrayList<PickerRow>()
-        rows += PickerRow.Header(null, "Feather Launcher")
-        FeatherKind.entries.forEach { rows += PickerRow.Feather(it) }
+        val p = palette()
+        val all = ArrayList<PickerRow>()
+        all += PickerRow.Header(null, "Feather Launcher")
+        FeatherKind.entries.forEach { all += PickerRow.Feather(it) }
+        val adapter = PickerAdapter()
 
         val list = ListView(activity).apply {
             divider = null
@@ -146,14 +158,43 @@ class Widgets(
             clipToPadding = false
             setPadding(0, 0, 0, dp(Ui.SPACE_S))
         }
-        val adapter = PickerAdapter(rows)
         list.adapter = adapter
-        list.setOnKeyListener { _, code, event -> stepPicker(list, rows, code, event) }
+        val nothing = TextView(activity).apply {
+            style(TextStyle.Secondary, p.textSecondary)
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(Ui.SPACE_XL), dp(Ui.SPACE_XL), dp(Ui.SPACE_XL), dp(Ui.SPACE_XL))
+            visibility = View.GONE
+        }
+        val search = android.widget.EditText(activity).apply {
+            hint = "Search widgets"
+            isSingleLine = true
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
+            style(TextStyle.Body, p.text)
+            setHintTextColor(p.textTertiary)
+            Ui.cursor(this, p.text)
+            background = Ui.rounded(activity, p.surfaceHigh, Ui.RADIUS_M)
+            setPadding(dp(Ui.SPACE_L), 0, dp(Ui.SPACE_L), 0)
+        }
+        fun show() {
+            val query = search.text.toString().trim().lowercase()
+            adapter.rows = if (query.isEmpty()) all.toList() else filter(all, query)
+            adapter.notifyDataSetChanged()
+            nothing.text = "No widgets match \"${search.text.toString().trim()}\""
+            nothing.visibility = if (adapter.rows.isEmpty()) View.VISIBLE else View.GONE
+        }
+        search.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: android.text.Editable?) = show()
+        })
+        show()
+
+        list.setOnKeyListener { _, code, event -> stepPicker(list, adapter.rows, code, event) }
         list.setOnItemClickListener { _, _, position, _ ->
-            when (val row = rows[position]) {
+            when (val row = adapter.rows[position]) {
                 is PickerRow.Widget -> {
                     overlays.dismiss()
-                    bind(row.info)
+                    add(row.info, null)
                 }
                 is PickerRow.Feather -> {
                     overlays.dismiss()
@@ -162,23 +203,58 @@ class Widgets(
                 else -> Unit
             }
         }
+        // Held, a widget can be dragged onto a page, ours or another app's.
         list.setOnItemLongClickListener { _, view, position, _ ->
-            val row = rows[position] as? PickerRow.Feather ?: return@setOnItemLongClickListener false
-            val preview = (view.getTag(R.id.widget_preview) as? View) ?: return@setOnItemLongClickListener false
+            val preview = (view.getTag(R.id.widget_preview) as? View)?.takeIf { it.width > 0 } ?: return@setOnItemLongClickListener false
+            when (val row = adapter.rows[position]) {
+                is PickerRow.Feather -> onFeatherHeld?.invoke(row.kind, preview)
+                is PickerRow.Widget -> onWidgetHeld?.invoke(row.info, preview, spanX(row.info), spanY(row.info))
+                else -> return@setOnItemLongClickListener false
+            }
             view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
-            onFeatherHeld?.invoke(row.kind, preview)
             true
         }
-        overlays.showSheet("Widgets", list, scrollable = list, fill = true)
+        val content = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(search, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply {
+                setMargins(dp(Ui.SPACE_L), 0, dp(Ui.SPACE_L), dp(Ui.SPACE_S))
+            })
+            addView(nothing, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+        overlays.showSheet("Widgets", content, scrollable = list, fill = true)
         // Other apps' widgets are listed once their names are read, which can take a moment
         // with many apps; the sheet opens straight away with Feather's own.
         previews.execute {
             val others = otherApps()
             main.post {
-                rows += others
-                adapter.notifyDataSetChanged()
+                all += others
+                show()
             }
         }
+    }
+
+    /**
+     * The rows matching [query]: each widget whose name or app's name has it, under its app's
+     * name as before; an app's name matching keeps all its widgets.
+     */
+    private fun filter(rows: List<PickerRow>, query: String): List<PickerRow> {
+        val out = ArrayList<PickerRow>()
+        var header: PickerRow.Header? = null
+        var headerShown = false
+        for (row in rows) {
+            val name = when (row) {
+                is PickerRow.Header -> { header = row; headerShown = false; continue }
+                is PickerRow.Widget -> row.name
+                is PickerRow.Feather -> row.kind.label
+            }
+            val app = header?.app.orEmpty()
+            if (query !in name.lowercase() && query !in app.lowercase()) continue
+            if (!headerShown) header?.let { out += it }
+            headerShown = true
+            out += row
+        }
+        return out
     }
 
     /**
@@ -237,7 +313,8 @@ class Widgets(
         class Feather(val kind: FeatherKind) : PickerRow()
     }
 
-    private inner class PickerAdapter(private val rows: List<PickerRow>) : BaseAdapter() {
+    private inner class PickerAdapter : BaseAdapter() {
+        var rows: List<PickerRow> = emptyList()
         private val loaded = HashMap<AppWidgetProviderInfo, Drawable?>()
 
         override fun getCount() = rows.size
@@ -264,10 +341,10 @@ class Widgets(
                         addView(ImageView(activity), LinearLayout.LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(10) })
                         addView(TextView(activity).apply { style(TextStyle.Label, p.text) })
                     }
-                    // Built-ins are listed under the launcher's own icon so every header lines up.
+                    // Built-ins are listed under the launcher's own icon, in the icon shape like every other app's.
                     (view.getChildAt(0) as ImageView).apply {
-                        if (row.packageName == null) setImageResource(R.mipmap.ic_launcher)
-                        else setImageBitmap(appIcon(row.packageName))
+                        val icon = appIcon(row.packageName ?: activity.packageName)
+                        if (icon != null) setImageBitmap(icon) else setImageResource(R.mipmap.ic_launcher)
                     }
                     (view.getChildAt(1) as TextView).text = row.app
                     view
@@ -280,6 +357,8 @@ class Widgets(
                     parts.size.text = "${spanX(row.info)} × ${spanY(row.info)}"
                     val preview = parts.preview
                     preview.tag = row.info
+                    preview.cells = spanX(row.info) to spanY(row.info)
+                    view.setTag(R.id.widget_preview, preview)
                     if (loaded.containsKey(row.info)) {
                         preview.setImageDrawable(loaded[row.info])
                     } else {
@@ -299,22 +378,19 @@ class Widgets(
             }
         }
 
-        private inner class CardParts(val preview: ImageView, val name: TextView, val size: TextView)
+        private inner class CardParts(val preview: Rounded, val name: TextView, val size: TextView)
 
         private fun cardParts(view: FrameLayout): CardParts {
             val card = view.getChildAt(0) as LinearLayout
             val top = card.getChildAt(0) as FrameLayout
             val bottom = card.getChildAt(1) as LinearLayout
-            return CardParts(top.getChildAt(0) as ImageView, bottom.getChildAt(0) as TextView, bottom.getChildAt(1) as TextView)
+            return CardParts(top.getChildAt(0) as Rounded, bottom.getChildAt(0) as TextView, bottom.getChildAt(1) as TextView)
         }
 
         /** Feather's widgets, live, made once each while the list is open. */
         private val featherCards = HashMap<FeatherKind, View>()
 
-        /**
-         * One of Feather's widgets as it will look: the real widget, live, on the wallpaper's own
-         * tone (the clock's white type needs something dark under it), with what it's for.
-         */
+        /** One of Feather's widgets as it will look: the real widget, live, with what it's for. */
         private fun featherCard(kind: FeatherKind, p: Palette): View {
             val preview = object : FrameLayout(activity) {
                 // A picture of the widget, not the widget itself: a tap picks it from the list.
@@ -322,9 +398,6 @@ class Widgets(
             }.apply {
                 // Nothing in it takes the keypad highlight either; the list skips holding a row that has such things.
                 descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
-                background = Ui.rounded(activity, p.drawer, Ui.RADIUS_M)
-                clipToOutline = true
-                setPadding(dp(Ui.SPACE_S), dp(Ui.SPACE_S), dp(Ui.SPACE_S), dp(Ui.SPACE_S))
                 // The size it takes on the home screen, so it shows just what it will there.
                 val (w, h) = grid().widgetSize(kind.w, kind.height(cellHeightDp))
                 addView(sample(kind), FrameLayout.LayoutParams(
@@ -368,7 +441,7 @@ class Widgets(
 
         private fun widgetCard(p: Palette): FrameLayout {
             val top = FrameLayout(activity).apply {
-                addView(ImageView(activity).apply {
+                addView(Rounded().apply {
                     adjustViewBounds = true
                     maxHeight = dp(132)
                     scaleType = ImageView.ScaleType.FIT_CENTER
@@ -399,9 +472,42 @@ class Widgets(
         }
     }
 
+    /**
+     * Another app's widget preview, its corners rounded as the widget's will be on the home
+     * screen, in proportion to how much smaller it's drawn here.
+     */
+    private inner class Rounded : ImageView(activity) {
+        /** The cells the widget takes, for its size on the home screen. */
+        var cells = 1 to 1
+        private val path = android.graphics.Path()
+        private val drawn = android.graphics.RectF()
+
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            val image = drawable ?: return super.onDraw(canvas)
+            drawn.set(0f, 0f, image.intrinsicWidth.toFloat(), image.intrinsicHeight.toFloat())
+            imageMatrix.mapRect(drawn)
+            drawn.offset(paddingLeft.toFloat(), paddingTop.toFloat())
+            val full = grid().widgetSize(cells.first, cells.second).first - 2 * dp(CardWidget.GAP)
+            val radius = dp(WidgetStyle.radius) * (drawn.width() / full.coerceAtLeast(1)).coerceAtMost(1f)
+            path.reset()
+            path.addRoundRect(drawn, radius, radius, android.graphics.Path.Direction.CW)
+            canvas.save()
+            canvas.clipPath(path)
+            super.onDraw(canvas)
+            canvas.restore()
+        }
+    }
+
     // endregion
 
     // region Binding
+
+    /** Adds another app's widget: bound, set up if it needs it, then placed ([at] where it was dropped). */
+    fun add(info: AppWidgetProviderInfo, at: Triple<Int, Int, Int>?) {
+        pendingSpot = at
+        bind(info)
+    }
+
 
     private fun bind(info: AppWidgetProviderInfo) {
         pendingId = host.allocateAppWidgetId()
@@ -447,12 +553,14 @@ class Widgets(
         val info = manager.getAppWidgetInfo(pendingId) ?: return cancelPending()
         val id = pendingId
         pendingId = AppWidgetManager.INVALID_APPWIDGET_ID
-        onAdded?.invoke(id, spanX(info), spanY(info))
+        onAdded?.invoke(id, spanX(info), spanY(info), pendingSpot)
+        pendingSpot = null
     }
 
     private fun cancelPending() {
         if (pendingId != AppWidgetManager.INVALID_APPWIDGET_ID) host.deleteAppWidgetId(pendingId)
         pendingId = AppWidgetManager.INVALID_APPWIDGET_ID
+        pendingSpot = null
     }
 
     // endregion

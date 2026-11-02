@@ -119,7 +119,9 @@ class HomeActivity : Activity(), HomeScreen.Host {
         setUpDrawer()
 
         widgets = Widgets(this, overlays, { palette }, { pkg ->
+            // Feather itself isn't in the app list; its icon is drawn in the same shape.
             repo.apps.firstOrNull { it.packageName == pkg }?.let(repo::icon)
+                ?: runCatching { repo.shape.render(packageManager.getApplicationIcon(pkg), Ui.dp(this, 48)) }.getOrNull()
         }) { homeScreen.grid() }
         // The dock's apps were cached on disk last time; decode their icons before the first frame.
         val dockKeys = Workspace(this).items.filter { it.inDock }.map { it.ref }
@@ -132,6 +134,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         widgets.onAdded = homeScreen::addWidget
         widgets.onFeatherPicked = homeScreen::addFeather
         widgets.onFeatherHeld = homeScreen::armWidget
+        widgets.onWidgetHeld = homeScreen::armOtherWidget
         repo.onChanged = ::onAppsChanged
         updateResults()
         applyTheme()
