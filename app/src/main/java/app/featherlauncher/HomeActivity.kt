@@ -271,6 +271,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
     override fun onResume() {
         super.onResume()
         running = this
+        webSearch = null
         if (::smartSearch.isInitialized) preloadSearch()
         // Settings may have changed on the settings page.
         prefs.reload()
@@ -285,6 +286,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         repo.setShape(prefs.iconShape)
         applyDarkMode()
         homeScreen.bindAll()
+        homeScreen.refreshWidgets()
         focusDockStart()
         updateResults()
         watchLimits()
@@ -574,7 +576,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
             this.search.hint = "Search apps, contacts and more"
             if (!search && category == null) category = visibleCategories().firstOrNull()?.id
             setPanelLook()
-            updateResults()
+            updateResults(force = true)
             panelAnimator?.cancel()
             drawer.animate().cancel()
             drawer.visibility = View.VISIBLE
@@ -782,8 +784,11 @@ class HomeActivity : Activity(), HomeScreen.Host {
     /** What the list was last showing; a refresh of the same thing keeps the scroll and highlight. */
     private var shownKey = ""
 
-    private fun updateResults(keepFocus: Boolean = true) {
+    private fun updateResults(keepFocus: Boolean = true, force: Boolean = false) {
         if (!::adapter.isInitialized) return
+        // Closed, there's nothing to show them in: they're made as the panel opens (every way of
+        // opening it asks), not each time the home screen shows or a notification comes.
+        if (drawer.visibility != View.VISIBLE && !force) return
         val key = "$searching|$showingHidden|$category|$chipCategory|${search.text}|${prefs.drawerCategories}"
         // Results arrive in stages (contacts, shortcuts, files); each refresh rebuilds the rows,
         // so the highlighted item is found again afterwards instead of being lost.
@@ -906,6 +911,10 @@ class HomeActivity : Activity(), HomeScreen.Host {
      * Each section puts what's most likely wanted first, and a result clearly ahead of all others
      * goes above them all as the Top match. Empty, it shows favorite contacts and frequent apps.
      */
+    /** Whether something can search the web; asked once per return to the home screen, not per letter. */
+    private var webSearch: Boolean? = null
+    private fun canSearchWeb(web: Intent) = webSearch ?: (packageManager.resolveActivity(web, 0) != null).also { webSearch = it }
+
     private fun updateSearch() {
         findViewById<View>(R.id.tabs_scroll).visibility = View.GONE
         chipsScroll.visibility = View.GONE
@@ -951,8 +960,9 @@ class HomeActivity : Activity(), HomeScreen.Host {
         }.sortedByDescending { it.points }
         val appHits = if (!shows(SearchSection.APPS)) emptyList()
         else if (raw.isEmpty()) {
+            // Each app's count read once, not again for every comparison.
             repo.apps.filter { it.key !in prefs.hidden }
-                .sortedByDescending { prefs.launchCount(it.key) }
+                .map { it to prefs.launchCount(it.key) }.sortedByDescending { it.second }.map { it.first }
                 .let { if (pickingApp) it.sortedBy { e -> e.label.lowercase() } else it }
                 .map { Hit(it, "app:${it.key}", 0.0) }
         } else {
@@ -1040,7 +1050,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
         // Last, the same words searched on the web, if the phone has something to search it with.
         val web = Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, raw)
-        if (raw.isNotEmpty() && shows(SearchSection.WEB) && packageManager.resolveActivity(web, 0) != null) {
+        if (raw.isNotEmpty() && shows(SearchSection.WEB) && canSearchWeb(web)) {
             title(SearchSection.WEB.title)
             rows += DrawerAdapter.Row.Result(Found(raw, "Search the web", "web", iconRes = R.drawable.ic_search) { startSafely(web) })
         }

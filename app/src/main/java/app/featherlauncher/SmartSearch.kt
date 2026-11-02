@@ -32,6 +32,8 @@ class Found(
     /** ...or a picture (shortcut icons, photo thumbnails). */
     var drawable: Drawable? = null,
     var bitmap: Bitmap? = null,
+    /** Gets [drawable] when its row is first shown, for pictures too slow to get for every result (shortcut icons). */
+    val loadDrawable: (() -> Drawable?)? = null,
     val open: () -> Unit,
 )
 
@@ -96,10 +98,29 @@ class SmartSearch(private val context: Context, private val start: (Intent) -> U
     }
 
     private var shortcuts: List<Shortcut> = emptyList()
+    /** Icons of shortcuts that have been shown, by id; a letter matches dozens, of which a few show. */
+    private val shortcutIcons = HashMap<String, Drawable?>()
+    /** Apps or their shortcuts changed since they were last read (or they never were). */
+    @Volatile private var shortcutsStale = true
+    private var watchingShortcuts = false
 
-    /** Loads every app's shortcuts in the background (only the default home app may see them). */
+    /** Loads every app's shortcuts in the background (only the default home app may see them), when they've changed. */
     fun loadShortcuts(appName: (String) -> String?, done: () -> Unit) {
-        if (!launcherApps.hasShortcutHostPermission()) return
+        if (!shortcutsStale || !launcherApps.hasShortcutHostPermission()) return
+        shortcutsStale = false
+        if (!watchingShortcuts) {
+            watchingShortcuts = true
+            launcherApps.registerCallback(object : LauncherApps.Callback() {
+                override fun onPackageRemoved(packageName: String, user: android.os.UserHandle) { shortcutsStale = true }
+                override fun onPackageAdded(packageName: String, user: android.os.UserHandle) { shortcutsStale = true }
+                override fun onPackageChanged(packageName: String, user: android.os.UserHandle) { shortcutsStale = true }
+                override fun onPackagesAvailable(packageNames: Array<out String>, user: android.os.UserHandle, replacing: Boolean) { shortcutsStale = true }
+                override fun onPackagesUnavailable(packageNames: Array<out String>, user: android.os.UserHandle, replacing: Boolean) { shortcutsStale = true }
+                override fun onShortcutsChanged(packageName: String, shortcuts: MutableList<android.content.pm.ShortcutInfo>, user: android.os.UserHandle) {
+                    shortcutsStale = true
+                }
+            }, main)
+        }
         io.execute {
             val query = LauncherApps.ShortcutQuery().setQueryFlags(
                 LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST or
@@ -114,6 +135,7 @@ class SmartSearch(private val context: Context, private val start: (Intent) -> U
             main.post {
                 val changed = found.map { it.info.id } != shortcuts.map { it.info.id }
                 shortcuts = found
+                shortcutIcons.clear()
                 if (changed) done()
             }
         }
@@ -129,7 +151,10 @@ class SmartSearch(private val context: Context, private val start: (Intent) -> U
             .mapNotNull { s -> Search.score(query, if (t9) s.digitWords else s.words)?.let { s to it } }
             .sortedBy { it.second }
             .map { (s, _) ->
-                Found(s.label, s.app, "shortcut:${s.info.`package`}/${s.info.id}", drawable = runCatching { launcherApps.getShortcutIconDrawable(s.info, density) }.getOrNull()) {
+                val id = "shortcut:${s.info.`package`}/${s.info.id}"
+                Found(s.label, s.app, id, loadDrawable = {
+                    shortcutIcons.getOrPut(id) { runCatching { launcherApps.getShortcutIconDrawable(s.info, density) }.getOrNull() }
+                }) {
                     runCatching { launcherApps.startShortcut(s.info, null, null) }
                 }
             }
@@ -148,54 +173,65 @@ class SmartSearch(private val context: Context, private val start: (Intent) -> U
 
     val mediaAllowed get() = mediaPermissions.any { context.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
 
-    private var mediaQuery = ""
+    @Volatile private var mediaQuery = ""
+    private var mediaSearch: Runnable? = null
 
-    /** Looks for photos, videos, music and files by name; results (and then thumbnails) arrive later. */
+    /**
+     * Looks for photos, videos, music and files by name; results (and then thumbnails) arrive later.
+     * Typing on, each search waits a moment ([MEDIA_WAIT]) first, so only the words typed in the end
+     * go through every file on the phone.
+     */
     fun media(raw: String, limit: Int, done: (List<Found>) -> Unit) {
         mediaQuery = raw
+        mediaSearch?.let(main::removeCallbacks)
         if (!mediaAllowed || raw.length < 2) return done(emptyList())
-        io.execute {
-            if (raw != mediaQuery) return@execute
-            val results = ArrayList<Found>()
-            val uri = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
-            runCatching {
-                context.contentResolver.query(
-                    uri,
-                    arrayOf(MediaStore.Files.FileColumns._ID, MediaStore.Files.FileColumns.DISPLAY_NAME,
-                        MediaStore.Files.FileColumns.MEDIA_TYPE, MediaStore.Files.FileColumns.MIME_TYPE),
-                    "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?",
-                    arrayOf("%$raw%"),
-                    "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC",
-                )?.use { c ->
-                    while (c.moveToNext() && results.size < limit) {
-                        val id = c.getLong(0)
-                        val name = c.getString(1) ?: continue
-                        val type = c.getInt(2)
-                        val mime = c.getString(3) ?: "*/*"
-                        val (icon, kind, base) = when (type) {
-                            MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE -> Triple(R.drawable.ic_media_pic, "Photo", MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
-                            MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO -> Triple(R.drawable.ic_media_video, "Video", MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
-                            MediaStore.Files.FileColumns.MEDIA_TYPE_AUDIO -> Triple(R.drawable.ic_media_music, "Audio", MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
-                            else -> Triple(R.drawable.ic_media_file, "File", uri)
-                        }
-                        val itemUri = ContentUris.withAppendedId(base, id)
-                        val found = Found(name, kind, "file:$itemUri", iconRes = icon) {
-                            start(Intent(Intent.ACTION_VIEW).setDataAndType(itemUri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
-                        }
-                        if (type == MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE || type == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO) {
-                            found.bitmap = runCatching { context.contentResolver.loadThumbnail(itemUri, Size(128, 128), null) }.getOrNull()
-                        }
-                        results += found
+        mediaSearch = Runnable { io.execute { findMedia(raw, limit, done) } }.also { main.postDelayed(it, MEDIA_WAIT) }
+    }
+
+    private fun findMedia(raw: String, limit: Int, done: (List<Found>) -> Unit) {
+        if (raw != mediaQuery) return
+        val results = ArrayList<Found>()
+        val uri = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        runCatching {
+            context.contentResolver.query(
+                uri,
+                arrayOf(MediaStore.Files.FileColumns._ID, MediaStore.Files.FileColumns.DISPLAY_NAME,
+                    MediaStore.Files.FileColumns.MEDIA_TYPE, MediaStore.Files.FileColumns.MIME_TYPE),
+                "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?",
+                arrayOf("%$raw%"),
+                "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC",
+            )?.use { c ->
+                while (c.moveToNext() && results.size < limit && raw == mediaQuery) {
+                    val id = c.getLong(0)
+                    val name = c.getString(1) ?: continue
+                    val type = c.getInt(2)
+                    val mime = c.getString(3) ?: "*/*"
+                    val (icon, kind, base) = when (type) {
+                        MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE -> Triple(R.drawable.ic_media_pic, "Photo", MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+                        MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO -> Triple(R.drawable.ic_media_video, "Video", MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+                        MediaStore.Files.FileColumns.MEDIA_TYPE_AUDIO -> Triple(R.drawable.ic_media_music, "Audio", MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
+                        else -> Triple(R.drawable.ic_media_file, "File", uri)
                     }
+                    val itemUri = ContentUris.withAppendedId(base, id)
+                    val found = Found(name, kind, "file:$itemUri", iconRes = icon) {
+                        start(Intent(Intent.ACTION_VIEW).setDataAndType(itemUri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                    }
+                    if (type == MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE || type == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO) {
+                        found.bitmap = runCatching { context.contentResolver.loadThumbnail(itemUri, Size(128, 128), null) }.getOrNull()
+                    }
+                    results += found
                 }
             }
-            main.post { if (raw == mediaQuery) done(results) }
         }
+        main.post { if (raw == mediaQuery) done(results) }
     }
 
     // endregion
 
     companion object {
+        /** How long file search waits for the next letter before looking. */
+        private const val MEDIA_WAIT = 200L
+
         /**
          * [label] with the letters that matched [raw] picked out, the way the search found them:
          * at the start of a word, as word initials, or anywhere. T9 digits match by their letters.

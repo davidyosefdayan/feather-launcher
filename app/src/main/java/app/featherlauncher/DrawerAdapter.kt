@@ -10,7 +10,6 @@ import android.view.ViewGroup
 import android.widget.BaseAdapter
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.Space
 import android.widget.TextView
 
 /** What tapping a contact (or one of its buttons) does. */
@@ -119,17 +118,24 @@ class DrawerAdapter(
                 addView(Components.pillButton(context, row.action, p.accent, p.onAccent) { row.onAction() },
                     LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)))
             }
+            // App rows are used again as the list scrolls and changes, with new apps in them; only
+            // new colors make them anew.
             is Row.Tiles -> {
-                val view = convertView as? LinearLayout ?: LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-                view.removeAllViews()
-                for (i in 0 until COLS) {
-                    val app = row.apps.getOrNull(i)
-                    view.addView(if (app == null) Space(context) else tile(app, p),
-                        LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                }
+                val view = (convertView as? LinearLayout)?.takeIf { it.getTag(R.id.drawer_palette) === p }
+                    ?: LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        setTag(R.id.drawer_palette, p)
+                        repeat(COLS) { addView(tile(p), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)) }
+                    }
+                for (i in 0 until COLS) bindTile(view.getChildAt(i) as LinearLayout, row.apps.getOrNull(i), p)
                 view
             }
-            is Row.Line -> line(row.app, p)
+            is Row.Line -> {
+                val view = (convertView as? LinearLayout)?.takeIf { it.getTag(R.id.drawer_palette) === p }
+                    ?: line(p).apply { setTag(R.id.drawer_palette, p) }
+                bindLine(view, row.app, p)
+                view
+            }
             is Row.Result -> result(row.found, p)
             Row.Divider -> View(context).apply {
                 // The text's color, faint, so it shows on light and dark wallpapers alike.
@@ -145,75 +151,93 @@ class DrawerAdapter(
         }
     }
 
-    private fun tile(app: AppEntry, p: Palette): View {
-        val image = ImageView(context).apply {
-            setImageBitmap(icon(app))
-            IconBadges.apply(this, isLocked(app), isNew(app), 54, badge(app))
-        }
-        return LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(4), dp(10), dp(4), dp(10))
-            // The notification badge hangs off the icon's corner.
-            clipChildren = false
-            clipToPadding = false
-            foreground = Ui.pressable(context, Ui.RADIUS_L, focusColor = p.onWall)
-            isFocusable = true
-            alpha = if (app.key == dragging?.key) 0f else 1f
-            tag = app
-            addView(image, LinearLayout.LayoutParams(dp(54), dp(54)))
-            addView(TextView(context).apply {
-                text = SmartSearch.highlight(app.label, query, p.onWall)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-                setTextColor(p.onWall)
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
-                gravity = Gravity.CENTER
-                includeFontPadding = false
-                setPadding(0, dp(8), 0, 0)
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            setOnClickListener { onClick(app, image) }
-            setOnLongClickListener { onLongClick(app, it); true }
-        }
+    /** An app tile, without its app yet ([bindTile]). */
+    private fun tile(p: Palette) = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        setPadding(dp(4), dp(10), dp(4), dp(10))
+        // The notification badge hangs off the icon's corner.
+        clipChildren = false
+        clipToPadding = false
+        foreground = Ui.pressable(context, Ui.RADIUS_L, focusColor = p.onWall)
+        addView(ImageView(context), LinearLayout.LayoutParams(dp(54), dp(54)))
+        addView(TextView(context).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            setTextColor(p.onWall)
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            setPadding(0, dp(8), 0, 0)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
 
-    private fun line(app: AppEntry, p: Palette): View {
-        val image = ImageView(context).apply {
-            setImageBitmap(icon(app))
-            IconBadges.apply(this, isLocked(app), isNew(app), 40, badge(app))
+    /** Puts [app] in [tile]; with none, the tile is an empty space at the end of the last row. */
+    private fun bindTile(tile: LinearLayout, app: AppEntry?, p: Palette) {
+        tile.animate().cancel()
+        tile.translationX = 0f
+        tile.translationY = 0f
+        tile.tag = app
+        tile.visibility = if (app == null) View.INVISIBLE else View.VISIBLE
+        tile.isFocusable = app != null
+        if (app == null) {
+            tile.setOnClickListener(null)
+            tile.setOnLongClickListener(null)
+            tile.isClickable = false
+            tile.isLongClickable = false
+            return
         }
-        return LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dp(56)
-            clipChildren = false
-            clipToPadding = false
-            setPadding(dp(Ui.SPACE_M), 0, dp(Ui.SPACE_L), 0)
-            foreground = Ui.pressable(context, Ui.RADIUS_L, focusColor = p.onWall)
-            isFocusable = true
-            alpha = if (app.key == dragging?.key) 0f else 1f
-            tag = app
-            addView(image, LinearLayout.LayoutParams(dp(40), dp(40)))
-            addView(TextView(context).apply {
-                text = SmartSearch.highlight(app.label, query, p.onWall)
-                style(TextStyle.Body, p.onWall)
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(Ui.SPACE_L) })
-            digitFor(app)?.let { d ->
-                addView(TextView(context).apply {
-                    text = d.toString()
-                    style(TextStyle.Label, p.onWallSecondary)
-                })
-            }
-            setOnClickListener { onClick(app, image) }
-            setOnLongClickListener { onLongClick(app, it); true }
+        val image = tile.getChildAt(0) as ImageView
+        image.setImageBitmap(icon(app))
+        IconBadges.apply(image, isLocked(app), isNew(app), 54, badge(app))
+        tile.alpha = if (app.key == dragging?.key) 0f else 1f
+        (tile.getChildAt(1) as TextView).text = SmartSearch.highlight(app.label, query, p.onWall)
+        tile.setOnClickListener { onClick(app, image) }
+        tile.setOnLongClickListener { onLongClick(app, it); true }
+    }
+
+    /** An app on its own row (the list look), without its app yet ([bindLine]). */
+    private fun line(p: Palette) = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        minimumHeight = dp(56)
+        clipChildren = false
+        clipToPadding = false
+        setPadding(dp(Ui.SPACE_M), 0, dp(Ui.SPACE_L), 0)
+        foreground = Ui.pressable(context, Ui.RADIUS_L, focusColor = p.onWall)
+        isFocusable = true
+        addView(ImageView(context), LinearLayout.LayoutParams(dp(40), dp(40)))
+        addView(TextView(context).apply {
+            style(TextStyle.Body, p.onWall)
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(Ui.SPACE_L) })
+        addView(TextView(context).apply { style(TextStyle.Label, p.onWallSecondary) })
+    }
+
+    private fun bindLine(row: LinearLayout, app: AppEntry, p: Palette) {
+        row.animate().cancel()
+        row.translationX = 0f
+        row.translationY = 0f
+        row.tag = app
+        row.alpha = if (app.key == dragging?.key) 0f else 1f
+        val image = row.getChildAt(0) as ImageView
+        image.setImageBitmap(icon(app))
+        IconBadges.apply(image, isLocked(app), isNew(app), 40, badge(app))
+        (row.getChildAt(1) as TextView).text = SmartSearch.highlight(app.label, query, p.onWall)
+        val digit = digitFor(app)
+        (row.getChildAt(2) as TextView).apply {
+            text = digit?.toString()
+            visibility = if (digit == null) View.GONE else View.VISIBLE
         }
+        row.setOnClickListener { onClick(app, image) }
+        row.setOnLongClickListener { onLongClick(app, it); true }
     }
 
     /** A number to call, setting, shortcut or file: icon, name with matches picked out, and what it is. */
     private fun result(found: Found, p: Palette): View {
         val size = dp(44)
+        if (found.drawable == null) found.loadDrawable?.let { found.drawable = it() }
         val icon = ImageView(context).apply {
             when {
                 found.bitmap != null -> {
@@ -266,7 +290,7 @@ class DrawerAdapter(
         val size = dp(44)
         val avatar: View = if (contact.photo != null) {
             ImageView(context).apply {
-                setImageURI(contact.photo)
+                photo(this, contact.photo)
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 background = Ui.rounded(context, p.folderFill, Ui.RADIUS_M)
                 clipToOutline = true
@@ -318,6 +342,27 @@ class DrawerAdapter(
         }
     }
 
+    /**
+     * Shows a contact's picture in [view]: straight away once it's been seen, else read in the
+     * background, so a row of contacts doesn't hold up typing while their pictures are read.
+     */
+    private fun photo(view: ImageView, uri: android.net.Uri) {
+        view.setTag(R.id.drawer_photo, uri)
+        photos.get(uri)?.let { return view.setImageBitmap(it) }
+        photoIo.execute {
+            val bitmap = runCatching { context.contentResolver.openInputStream(uri)?.use(android.graphics.BitmapFactory::decodeStream) }.getOrNull()
+                ?: return@execute
+            main.post {
+                photos.put(uri, bitmap)
+                if (view.getTag(R.id.drawer_photo) == uri) view.setImageBitmap(bitmap)
+            }
+        }
+    }
+
+    private val photos = android.util.LruCache<android.net.Uri, Bitmap>(PHOTOS)
+    private val photoIo = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+
     private fun contactButton(icon: Int, description: String, p: Palette, onClick: () -> Unit) = ImageView(context).apply {
         setImageResource(icon)
         imageTintList = android.content.res.ColorStateList.valueOf(p.onWall)
@@ -333,5 +378,7 @@ class DrawerAdapter(
 
     companion object {
         const val COLS = 4
+        /** Contacts' pictures kept in memory (small thumbnails). */
+        private const val PHOTOS = 60
     }
 }

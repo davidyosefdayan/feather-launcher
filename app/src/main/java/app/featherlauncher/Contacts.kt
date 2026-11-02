@@ -11,7 +11,10 @@ import android.provider.ContactsContract.CommonDataKinds.Email
 import android.provider.ContactsContract.CommonDataKinds.Phone
 import java.util.concurrent.Executors
 
-/** Contacts for Smart Search, loaded once in the background and kept in memory. */
+/**
+ * Contacts for Smart Search, loaded in the background and kept in memory; loaded again only
+ * once the contacts or the call history have changed.
+ */
 class Contacts(private val context: Context) {
     /**
      * A person, shown and called at [number]: their primary number, or the one a search
@@ -44,12 +47,17 @@ class Contacts(private val context: Context) {
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private var loading = false
+    /** Contacts or calls changed since they were last read (or they never were). */
+    @Volatile private var stale = true
+    private var watching = false
 
     val allowed get() = context.checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
 
     fun load() {
-        if (!allowed || loading) return
+        if (!allowed || loading || !stale) return
         loading = true
+        stale = false
+        watch()
         io.execute {
             // Every number per person, the primary one first.
             val numbers = LinkedHashMap<Long, MutableList<String>>()
@@ -102,18 +110,31 @@ class Contacts(private val context: Context) {
                     }
                 }
             }
+            // Made here, not on the main thread: each works out its words for searching as it's made.
+            val next = numbers.map { (id, list) ->
+                val (name, photo, starred) = details.getValue(id)
+                Contact(id, name, list.first(), list, photo, starred, emails[id])
+            }
+            val before = all
+            val changed = next.map { Triple(it.id, it.numbers, it.email) } != before.map { Triple(it.id, it.numbers, it.email) }
             main.post {
                 this.calls = calls
-                val next = numbers.map { (id, list) ->
-                    val (name, photo, starred) = details.getValue(id)
-                    Contact(id, name, list.first(), list, photo, starred, emails[id])
-                }
-                val changed = next.map { Triple(it.id, it.numbers, it.email) } != all.map { Triple(it.id, it.numbers, it.email) }
                 all = next
                 loading = false
                 if (changed) onLoaded?.invoke()
             }
         }
+    }
+
+    /** Watches the contacts and the call history, so a change is read the next time the home screen shows. */
+    private fun watch() {
+        if (watching) return
+        watching = true
+        val observer = object : android.database.ContentObserver(main) {
+            override fun onChange(selfChange: Boolean) { stale = true }
+        }
+        runCatching { context.contentResolver.registerContentObserver(android.provider.ContactsContract.AUTHORITY_URI, true, observer) }
+        runCatching { context.contentResolver.registerContentObserver(CallLog.Calls.CONTENT_URI, true, observer) }
     }
 
     /** Matches by name (letters or T9) and, for digits, by phone number too. */
