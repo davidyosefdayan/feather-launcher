@@ -108,7 +108,8 @@ class PinPad private constructor(
     }
 
     fun delete() {
-        if (rejecting) return
+        // With all 4 in, they're being checked; nothing changes them until that's done.
+        if (rejecting || entered.length == LENGTH) return
         entered = entered.dropLast(1)
         render()
     }
