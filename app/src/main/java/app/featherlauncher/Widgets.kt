@@ -1,6 +1,7 @@
 package app.featherlauncher
 
 import android.app.Activity
+import android.app.ActivityOptions
 import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetHostView
 import android.appwidget.AppWidgetManager
@@ -9,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.TypedValue
@@ -79,7 +81,21 @@ class Widgets(
     }
 
     fun reconfigure(appWidgetId: Int) {
-        runCatching { host.startAppWidgetConfigureActivityForResult(activity, appWidgetId, 0, REQUEST_RECONFIGURE, null) }
+        runCatching { host.startAppWidgetConfigureActivityForResult(activity, appWidgetId, 0, REQUEST_RECONFIGURE, setupOptions()) }
+    }
+
+    /**
+     * Lets a widget's setup screen open. Android opens it on Feather's behalf, and since Android 14
+     * it only lends Feather's right to open screens (it's in front) when Feather says so. Without
+     * this the setup screen is quietly never opened, unless a system window happens to be showing,
+     * as the "allow widget" dialog is the first time an app's widget is added.
+     */
+    @Suppress("DEPRECATION") // ALLOWED, the only choice on Android 14 and 15.
+    private fun setupOptions(): android.os.Bundle? {
+        if (Build.VERSION.SDK_INT < 34) return null
+        val mode = if (Build.VERSION.SDK_INT >= 36) ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE
+            else ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+        return ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(mode).toBundle()
     }
 
     /** Smallest size, in cells, the widget allows when resized. */
@@ -531,7 +547,7 @@ class Widgets(
         val optional = info.widgetFeatures and AppWidgetProviderInfo.WIDGET_FEATURE_CONFIGURATION_OPTIONAL != 0
         if (info.configure == null || optional) return finishAdd()
         try {
-            host.startAppWidgetConfigureActivityForResult(activity, pendingId, 0, REQUEST_CONFIGURE, null)
+            host.startAppWidgetConfigureActivityForResult(activity, pendingId, 0, REQUEST_CONFIGURE, setupOptions())
         } catch (e: Exception) {
             cancelPending()
             Toast.makeText(activity, "This widget can't be set up", Toast.LENGTH_SHORT).show()
