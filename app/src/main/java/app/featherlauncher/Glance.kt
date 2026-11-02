@@ -73,14 +73,14 @@ class Glance(private val context: Context) {
             val erevYomTov = JewishCalendar.isYomTov(today + 1, israel) && !JewishCalendar.isYomTov(today, israel)
             val lighting = Zmanim.sun(now, place, Zmanim.SUNRISE, false)?.minus(prefs.candleMinutes * 60_000L)
             if (lighting != null && now < lighting && weekday != Calendar.SATURDAY && (weekday == Calendar.FRIDAY || erevYomTov)) {
-                coming += Item(R.drawable.ic_sunset, "Candle lighting", placeTime.format(Date(lighting)), Tap.ZMANIM,
+                coming += Item(R.drawable.ic_sunset, he("Candle lighting", HebrewText::zman), placeTime.format(Date(lighting)), Tap.ZMANIM,
                     if (lighting - now < 4 * HOUR) 1 else 5, time = lighting, clock = placeTime.format(Date(lighting)))
             }
         }
 
         // In the last hour before shkiah (the end of Mincha), it comes before the alarm and the like.
         val shkiahSoon = prefs.clockZman && sunset != null && now < sunset && sunset - now <= HOUR
-        if (shkiahSoon) coming += Item(R.drawable.ic_sunset, "Shkiah", placeTime.format(Date(sunset!!)), Tap.ZMANIM, 2,
+        if (shkiahSoon) coming += Item(R.drawable.ic_sunset, he("Shkiah", HebrewText::zman), placeTime.format(Date(sunset!!)), Tap.ZMANIM, 2,
             time = sunset, clock = placeTime.format(Date(sunset)))
 
         // Tonight's alarm, once it's evening.
@@ -100,7 +100,7 @@ class Glance(private val context: Context) {
         }
 
         if (prefs.clockZman && place != null) info.nextZman(now, place)?.takeIf { !(shkiahSoon && it.name == "Shkiah") }?.let { z ->
-            coming += Item(R.drawable.ic_time, z.name, placeTime.format(Date(z.time)), Tap.ZMANIM, 8,
+            coming += Item(R.drawable.ic_time, he(z.name, HebrewText::zman), placeTime.format(Date(z.time)), Tap.ZMANIM, 8,
                 time = z.time, clock = placeTime.format(Date(z.time)))
         }
 

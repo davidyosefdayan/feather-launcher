@@ -1037,7 +1037,7 @@ class ZmanimWidget(context: Context, item: HomeItem) : CardWidget(context, item)
                 }
                 val sp = if (narrow) 14f else 15f
                 val color = if (next) WidgetStyle.onAccentFill() else WidgetStyle.onCard()
-                addView(WidgetStyle.cardText(context, sp, if (next) WidgetStyle.title else WidgetStyle.body, color).apply { text = z.name },
+                addView(WidgetStyle.cardText(context, sp, if (next) WidgetStyle.title else WidgetStyle.body, color).apply { text = info.zmanName(z) },
                     LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(if (narrow) 8 else 12) })
                 addView(WidgetStyle.cardText(context, sp, if (next) WidgetStyle.title else WidgetStyle.body,
                     if (next) color else WidgetStyle.onCardQuiet()).apply { text = time(z.time, place.zone) })

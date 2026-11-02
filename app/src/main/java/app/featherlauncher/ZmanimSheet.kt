@@ -43,7 +43,7 @@ object ZmanimSheet {
                     setPadding(Ui.dp(ctx, Ui.SPACE_XL - Ui.SPACE_S), 0, Ui.dp(ctx, Ui.SPACE_XL - Ui.SPACE_S), 0)
                 }
                 addView(TextView(ctx).apply {
-                    text = z.name
+                    text = info.zmanName(z)
                     style(if (isNext) TextStyle.Label else TextStyle.Body, color)
                 }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 addView(TextView(ctx).apply {

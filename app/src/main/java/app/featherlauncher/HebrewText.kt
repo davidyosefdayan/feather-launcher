@@ -59,6 +59,9 @@ object HebrewText {
         return HOLIDAYS[name] ?: name
     }
 
+    /** "שקיעה" for "Shkiah", as a luach writes the day's zmanim. */
+    fun zman(name: String) = ZMANIM[name] ?: name
+
     /** "כ״ג בעומר". */
     fun omer(n: Int) = "${number(n)} בעומר"
 
@@ -74,6 +77,14 @@ object HebrewText {
      * side that read left to right keep two Hebrew parts in a row from swapping places.
      */
     fun isolate(text: String) = "\u200E$text\u200E"
+
+    private val ZMANIM = mapOf(
+        "Alos hashachar" to "עלות השחר", "Misheyakir" to "משיכיר", "Netz" to "נץ החמה",
+        "Sof zman Shema" to "סוף זמן ק${GERSHAYIM}ש", "Sof zman Tefila" to "סוף זמן תפילה", "Chatzos" to "חצות",
+        "Mincha gedola" to "מנחה גדולה", "Mincha ketana" to "מנחה קטנה", "Plag hamincha" to "פלג המנחה",
+        "Candle lighting" to "הדלקת נרות", "Shkiah" to "שקיעה", "Tzeis" to "צאת הכוכבים",
+        "Sunrise" to "זריחה", "Sunset" to "שקיעה",
+    )
 
     private val MONTHS = mapOf(
         "Tishrei" to "תשרי", "Cheshvan" to "חשון", "Kislev" to "כסלו", "Teves" to "טבת", "Shevat" to "שבט",

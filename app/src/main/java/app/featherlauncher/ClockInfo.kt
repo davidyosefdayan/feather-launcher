@@ -102,6 +102,10 @@ class ClockInfo(private val context: Context) {
     private fun metres(at: Pair<Double, Double>, lat: Double, lon: Double) =
         FloatArray(1).also { Location.distanceBetween(at.first, at.second, lat, lon, it) }[0]
 
+    /** [zman]'s name to show: in Hebrew with Show in Hebrew on, kept whole and to the left in an English line. */
+    fun zmanName(zman: Zman) =
+        if (prefs.secondCalendar == SecondCalendar.HEBREW && prefs.hebrewInHebrew) HebrewText.isolate(HebrewText.zman(zman.name)) else zman.name
+
     fun zmanim(day: Long, place: Place) = Zmanim.forDay(day, place, prefs.zmanMagenAvraham, prefs.candleMinutes, sunOnly = !prefs.dailyZmanim)
 
     fun nextZman(now: Long, place: Place) = Zmanim.next(now, place, prefs.zmanMagenAvraham, prefs.candleMinutes, sunOnly = !prefs.dailyZmanim)
