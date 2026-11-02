@@ -1307,6 +1307,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
             val apps = currentApps()
             views = tileViews()
             home = views.mapValues { (_, v) -> rectOf(v) }
+            unclipRows(true)
             val keys = apps.map { it.key }
             // Only apps on screen can be moved among; the order keeps the rest as they were.
             slots = keys.mapNotNull { home[it] }
@@ -1321,6 +1322,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
             // already in their current slots, so what's seen keeps up with the order.
             if (views.values.any { !it.isAttachedToWindow }) {
                 views = tileViews()
+                unclipRows(true)
                 current.forEachIndexed { i, key ->
                     val view = views[key] ?: return@forEachIndexed
                     val start = home[key] ?: return@forEachIndexed
@@ -1359,6 +1361,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
         private fun resetSlots() {
             views.values.forEach { it.animate().cancel(); it.translationX = 0f; it.translationY = 0f }
+            unclipRows(false)
             order = null
             slots = emptyList()
             views = emptyMap()
@@ -1454,6 +1457,12 @@ class HomeActivity : Activity(), HomeScreen.Host {
         private fun overTop(y: Float) = zone != null && y < overlays.insets.top + dp(28)
     }
     private var lastTouchY = 0f
+
+    /** Apps moving up or down a row pass outside their own row; with [on], nothing cuts them off on the way. */
+    private fun unclipRows(on: Boolean) {
+        list.clipChildren = !on
+        for (i in 0 until list.childCount) (list.getChildAt(i) as? ViewGroup)?.clipChildren = !on
+    }
 
     /** Re-renders the category page without jumping back to the top. */
     private fun updateAppListKeepingScroll() {
@@ -2203,11 +2212,8 @@ class HomeActivity : Activity(), HomeScreen.Host {
         val slots = order.map { home.getValue(it) }
         val moving = tiles[entry.key] ?: return
         moving.requestFocusFromTouch()
-        // Apps moving up or down a row pass outside their own row; nothing cuts them off on the way.
-        val rows = (0 until list.childCount).mapNotNull { list.getChildAt(it) as? ViewGroup }
         fun unclip(on: Boolean) {
-            list.clipChildren = !on
-            rows.forEach { it.clipChildren = !on }
+            unclipRows(on)
             // The one moving is drawn over the others.
             moving.translationZ = if (on) dp(4).toFloat() else 0f
             (moving.parent as? View)?.translationZ = if (on) 1f else 0f
