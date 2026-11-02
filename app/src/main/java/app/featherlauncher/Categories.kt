@@ -146,6 +146,9 @@ class Categories(context: Context) {
     }
 
     companion object {
+        /** The hidden apps page, for [sorted] and [setOrder]: its apps keep an order too, though it's no category. */
+        const val HIDDEN = "hidden"
+
         /** Icons a category can use, by name. */
         val ICONS = linkedMapOf(
             "chat" to R.drawable.ic_cat_chat, "phone" to R.drawable.ic_cat_phone, "mail" to R.drawable.ic_cat_mail,

@@ -711,6 +711,9 @@ class HomeActivity : Activity(), HomeScreen.Host {
         parkFocus()
     }
 
+    /** The hidden apps, in the order they were arranged on their page. */
+    private fun hiddenApps() = categories.sorted(Categories.HIDDEN, repo.apps.filter { it.key in prefs.hidden })
+
     private fun visibleCategories(): List<Categories.Item> {
         val used = repo.apps.filter { it.key !in prefs.hidden }.map { categories.of(it) }.toSet()
         // Categories you made always show; automatic ones only when they have apps.
@@ -813,7 +816,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         if (showingHidden) {
             // Its own page, like a category, but no tab is selected.
             title.text = "Hidden apps"
-            val apps = repo.apps.filter { it.key in prefs.hidden }
+            val apps = hiddenApps()
             if (apps.isEmpty()) rows += DrawerAdapter.Row.Title("No hidden apps. Hold an app in the app list and choose Hide from app list.")
             addApps(rows, apps)
             tabsScroll.visibility = if (prefs.drawerCategories) View.VISIBLE else View.GONE
@@ -1252,7 +1255,8 @@ class HomeActivity : Activity(), HomeScreen.Host {
             adapter.notifyDataSetChanged()
             // Slots are measured once the list has redrawn with the dragged tile left empty.
             list.post { if (active && order == null) captureSlots() }
-            showZone()
+            // Hidden apps never go on the home screen.
+            if (app.key !in prefs.hidden) showZone()
         }
 
         private fun move(x: Float, y: Float) {
@@ -1278,12 +1282,12 @@ class HomeActivity : Activity(), HomeScreen.Host {
             if (overTab != hoverTab) {
                 hoverTab = overTab
                 root.removeCallbacks(switchTab)
-                if (overTab != null && overTab != category) root.postDelayed(switchTab, 350)
+                if (overTab != null && (overTab != category || showingHidden)) root.postDelayed(switchTab, 350)
             }
             if (overTab != null) return
 
             // Over the grid: make room where the finger is.
-            if (searching || !prefs.drawerCategories) return
+            if (searching || !(prefs.drawerCategories || showingHidden)) return
             reorderAt(x, y)
         }
 
@@ -1303,6 +1307,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
             val apps = currentApps()
             views = tileViews()
             home = views.mapValues { (_, v) -> rectOf(v) }
+            unclipRows(true)
             val keys = apps.map { it.key }
             // Only apps on screen can be moved among; the order keeps the rest as they were.
             slots = keys.mapNotNull { home[it] }
@@ -1317,6 +1322,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
             // already in their current slots, so what's seen keeps up with the order.
             if (views.values.any { !it.isAttachedToWindow }) {
                 views = tileViews()
+                unclipRows(true)
                 current.forEachIndexed { i, key ->
                     val view = views[key] ?: return@forEachIndexed
                     val start = home[key] ?: return@forEachIndexed
@@ -1325,14 +1331,16 @@ class HomeActivity : Activity(), HomeScreen.Host {
                     view.translationY = (slot.top - start.top).toFloat()
                 }
             }
-            // Well inside a slot (its middle 60%), so the edge between two never flips back and forth.
-            val target = slots.indexOfFirst { r ->
-                val dx = r.width() * 0.2f
-                val dy = r.height() * 0.2f
-                x > r.left + dx && x < r.right - dx && y > r.top + dy && y < r.bottom - dy
-            }
+            // The slot nearest the finger, so it follows anywhere on the page; anywhere after the last
+            // app, it goes last. It moves only once that slot is clearly nearer than the one it's in, so
+            // the edge between two never flips back and forth.
+            fun distance(r: android.graphics.Rect) = kotlin.math.hypot(x - r.exactCenterX(), y - r.exactCenterY())
             val from = current.indexOf(app.key)
-            if (target < 0 || target == from) return
+            val last = slots.lastOrNull() ?: return
+            val pastEnd = y > last.bottom || (y > last.top && x > last.right)
+            val target = if (pastEnd) slots.lastIndex else slots.indices.minBy { distance(slots[it]) }
+            if (target == from || from !in slots.indices) return
+            if (!pastEnd && distance(slots[target]) > distance(slots[from]) - slots[from].width() * 0.15f) return
             current.add(target, current.removeAt(from))
             current.forEachIndexed { i, key ->
                 val view = views[key] ?: return@forEachIndexed
@@ -1346,7 +1354,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         /** Saves the order made while dragging, putting apps not on screen back where they were. */
         private fun commitOrder() {
             val made = order ?: return
-            val id = category ?: return
+            val id = if (showingHidden) Categories.HIDDEN else category ?: return
             val all = currentApps().map { it.key }
             val onScreen = made.toSet()
             val iterator = made.iterator()
@@ -1355,6 +1363,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
         private fun resetSlots() {
             views.values.forEach { it.animate().cancel(); it.translationX = 0f; it.translationY = 0f }
+            unclipRows(false)
             order = null
             slots = emptyList()
             views = emptyMap()
@@ -1382,6 +1391,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         }
 
         private fun currentApps(): List<AppEntry> {
+            if (showingHidden) return hiddenApps()
             val id = category ?: return emptyList()
             return categories.sorted(id, repo.apps.filter { it.key !in prefs.hidden && categories.of(it) == id })
         }
@@ -1390,6 +1400,11 @@ class HomeActivity : Activity(), HomeScreen.Host {
             val app = entry ?: return
             val id = hoverTab ?: return
             categories.assign(app, id)
+            // From the hidden apps page, it's back in the app list.
+            if (showingHidden) {
+                prefs.setHidden(app.key, false)
+                showingHidden = false
+            }
             // Arrives at the end of its new category.
             categories.setOrder(id, currentAppsIn(id).map { it.key }.filter { it != app.key } + app.key)
             category = id
@@ -1444,6 +1459,12 @@ class HomeActivity : Activity(), HomeScreen.Host {
         private fun overTop(y: Float) = zone != null && y < overlays.insets.top + dp(28)
     }
     private var lastTouchY = 0f
+
+    /** Apps moving up or down a row pass outside their own row; with [on], nothing cuts them off on the way. */
+    private fun unclipRows(on: Boolean) {
+        list.clipChildren = !on
+        for (i in 0 until list.childCount) (list.getChildAt(i) as? ViewGroup)?.clipChildren = !on
+    }
 
     /** Re-renders the category page without jumping back to the top. */
     private fun updateAppListKeepingScroll() {
@@ -1517,22 +1538,17 @@ class HomeActivity : Activity(), HomeScreen.Host {
             updateResults()
         }
         val pin = prefs.hiddenPin
-        if (pin != null) PinPad.ask(this, palette, overlays, pin, show) else show()
+        if (pin != null) PinPad.ask(this, palette, overlays, pin, "To open hidden apps", show) else show()
     }
 
-    /** Number keys, Back-delete and OK go to the PIN pad while it's open. */
+    /** Number keys and Delete go to the PIN pad while it's open (Back goes through [onBack]). */
     private fun pinKey(event: KeyEvent): Boolean {
         val pad = PinPad.active ?: return false
         if (!overlays.isShowing) return false
         val digit = digitOf(event.keyCode)
-        val handled = digit != null || event.keyCode == KeyEvent.KEYCODE_DEL ||
-            event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER
-        if (handled && event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-            when {
-                digit != null -> pad.type('0' + digit)
-                event.keyCode == KeyEvent.KEYCODE_DEL -> pad.delete()
-                else -> pad.confirm()
-            }
+        val handled = digit != null || event.keyCode == KeyEvent.KEYCODE_DEL
+        if (handled && event.action == KeyEvent.ACTION_DOWN) {
+            if (digit != null) { if (event.repeatCount == 0) pad.type('0' + digit) } else pad.delete()
         }
         return handled
     }
@@ -1686,6 +1702,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         when {
             homeScreen.isKeyMoving -> homeScreen.cancelKeyMove()
             keyMover != null -> keyMover?.undo?.invoke().also { keyMover = null }
+            PinPad.active?.takeIf { overlays.isShowing }?.back() == true -> Unit
             overlays.dismiss() -> Unit
             homeScreen.finishResize() -> Unit
             homeScreen.leaveWidget() -> Unit
@@ -2085,20 +2102,22 @@ class HomeActivity : Activity(), HomeScreen.Host {
             entry.label,
             listOf(
                 shortcuts.menuItems(entry),
-                listOf(
+                // Hidden apps are on their own page instead of in a category, and never on the home screen.
+                listOfNotNull(
                     MenuItem("Add to home", R.drawable.ic_home) {
                         hideDrawer()
                         homeScreen.addApp(entry)
-                    },
-                    MenuItem("Category: ${categories.find(categories.of(entry))?.name ?: ""}", R.drawable.ic_widgets) { categorySheet(entry) },
-                ) + listOfNotNull(
-                    // Apps keep an order you choose within their category.
+                    }.takeIf { !hidden },
+                    MenuItem("Category: ${categories.find(categories.of(entry))?.name ?: ""}", R.drawable.ic_widgets) { categorySheet(entry) }
+                        .takeIf { !hidden },
+                    // Apps keep an order you choose on their page.
                     MenuItem("Move", R.drawable.ic_move) { moveAppWithKeys(entry) }
-                        .takeIf { !searching && !showingHidden && prefs.drawerCategories && category == categories.of(entry) },
-                ) + listOf(
+                        .takeIf { !searching && (showingHidden || prefs.drawerCategories && category == categories.of(entry)) },
                     MenuItem(if (hidden) "Show in app list" else "Hide from app list",
                         if (hidden) R.drawable.ic_visibility else R.drawable.ic_visibility_off) {
                         prefs.setHidden(entry.key, !hidden)
+                        // Hiding it takes it off the home screen too.
+                        if (!hidden) homeScreen.onAppsChanged()
                         updateResults()
                     },
                     MenuItem("Uninstall", R.drawable.ic_delete, danger = true) {
@@ -2178,8 +2197,9 @@ class HomeActivity : Activity(), HomeScreen.Host {
      * stays on it), and the order is saved on OK.
      */
     private fun moveAppWithKeys(entry: AppEntry) {
-        val id = category ?: return
-        val apps = categories.sorted(id, repo.apps.filter { it.key !in prefs.hidden && categories.of(it) == id }).map { it.key }
+        val id = if (showingHidden) Categories.HIDDEN else category ?: return
+        val apps = (if (showingHidden) hiddenApps()
+        else categories.sorted(id, repo.apps.filter { it.key !in prefs.hidden && categories.of(it) == id })).map { it.key }
         val across = if (prefs.drawerGrid) DrawerAdapter.COLS else 1
         // Every app tile on screen, and where each sits now: the slots they move between.
         val tiles = HashMap<String, View>()
@@ -2194,11 +2214,8 @@ class HomeActivity : Activity(), HomeScreen.Host {
         val slots = order.map { home.getValue(it) }
         val moving = tiles[entry.key] ?: return
         moving.requestFocusFromTouch()
-        // Apps moving up or down a row pass outside their own row; nothing cuts them off on the way.
-        val rows = (0 until list.childCount).mapNotNull { list.getChildAt(it) as? ViewGroup }
         fun unclip(on: Boolean) {
-            list.clipChildren = !on
-            rows.forEach { it.clipChildren = !on }
+            unclipRows(on)
             // The one moving is drawn over the others.
             moving.translationZ = if (on) dp(4).toFloat() else 0f
             (moving.parent as? View)?.translationZ = if (on) 1f else 0f
