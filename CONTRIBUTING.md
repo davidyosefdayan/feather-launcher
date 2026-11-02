@@ -4,7 +4,7 @@ Thanks for helping. Bug fixes, fixes for a particular phone, and small improveme
 
 ## Before your first pull request
 
-**Sign the Contributor License Agreement.** On your first pull request, the CLA Assistant bot comments with a link: sign in with GitHub and agree once. That covers all your contributions, including earlier ones. The [CLA](CLA.md) explains what it means: you keep the copyright to your work and give the maintainer permission to use it in Feather Launcher under any license. Feather Launcher stays under the GNU General Public License v3.0, and every version released under it stays available under it.
+**Sign the Contributor License Agreement.** On your first pull request, the CLA Assistant bot comments with a link: sign in with GitHub and agree once. That covers your present and future contributions. The [CLA](CLA.md) explains what it means: you keep the copyright to your work and give the maintainer permission to use it in Feather Launcher under any license. Feather Launcher stays under the GNU General Public License v3.0, and every version released under it stays available under it.
 
 ## Making a change
 
