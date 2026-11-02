@@ -39,7 +39,3 @@ Should You wish to submit work that is not Your original creation, You may submi
 ## 7. Notice of Changes
 
 You agree to notify the Maintainer of any facts or circumstances of which You become aware that would make these representations inaccurate in any respect.
-
-## 8. Contributions Made Before Signing
-
-This Agreement also covers any Contributions You submitted to the Project before signing it.
