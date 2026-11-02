@@ -32,8 +32,11 @@ class Contacts(private val context: Context) {
         val words = Search.words(name)
         val digitWords = words.map(Search::toDigits)
 
+        /** Their numbers' digits alone, worked out once rather than on every key press. */
+        private val numberDigits = numbers.map { n -> n.filter { it.isDigit() } }
+
         /** The number whose digits contain [digits], if any. */
-        fun numberMatching(digits: String) = numbers.firstOrNull { n -> digits in n.filter { it.isDigit() } }
+        fun numberMatching(digits: String) = numbers.indices.firstOrNull { digits in numberDigits[it] }?.let(numbers::get)
 
         fun withNumber(n: String) = Contact(id, name, n, numbers, photo, starred, email)
     }

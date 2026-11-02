@@ -48,15 +48,45 @@ object Search {
 
     fun normalizeText(query: String) = words(query).joinToString("")
 
-    /** Lower is better; null means no match. */
+    /**
+     * Lower is better; null means no match. Every name is scored on every key press, so this
+     * looks through the words where they are rather than joining them into new strings.
+     */
     fun score(query: String, words: List<String>): Int? {
         if (query.isEmpty()) return 0
-        val joined = words.joinToString("")
-        if (joined.startsWith(query)) return 0
+        if (joinedMatches(words, query, 0, 0)) return 0
         for (i in 1 until words.size) if (words[i].startsWith(query)) return 1
-        if (query.length > 1 && words.joinToString("") { it.take(1) }.startsWith(query)) return 2
-        if (joined.contains(query)) return 3
+        if (query.length > 1 && initialsStartWith(words, query)) return 2
+        for (w in words.indices) for (c in words[w].indices) if (joinedMatches(words, query, w, c)) return 3
         return null
+    }
+
+    /** Whether the words run together are exactly [query]. */
+    fun joinedEquals(words: List<String>, query: String): Boolean =
+        words.sumOf { it.length } == query.length && joinedMatches(words, query, 0, 0)
+
+    /** Whether the words run together, from letter [char] of word [word] on, start with [query]. */
+    private fun joinedMatches(words: List<String>, query: String, word: Int, char: Int): Boolean {
+        var w = word
+        var c = char
+        for (q in query) {
+            while (w < words.size && c >= words[w].length) { w++; c = 0 }
+            if (w >= words.size || words[w][c] != q) return false
+            c++
+        }
+        return true
+    }
+
+    /** Whether the words' first letters, run together, start with [query]. */
+    private fun initialsStartWith(words: List<String>, query: String): Boolean {
+        var i = 0
+        for (w in words) {
+            if (w.isEmpty()) continue
+            if (i == query.length) return true
+            if (w[0] != query[i]) return false
+            i++
+        }
+        return i == query.length
     }
 }
 

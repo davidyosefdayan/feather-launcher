@@ -83,7 +83,7 @@ class SearchHistory private constructor(context: Context) {
             launches: Int = 0, lastUsed: Long = 0, starred: Boolean = false,
         ): Double? {
             val name = when {
-                words.joinToString("") == query -> 100.0
+                Search.joinedEquals(words, query) -> 100.0
                 else -> when (Search.score(query, words)) {
                     0 -> 60.0
                     1 -> 40.0
