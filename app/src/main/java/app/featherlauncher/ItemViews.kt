@@ -55,12 +55,23 @@ class AppIconView(context: Context, val item: HomeItem) : LinearLayout(context) 
             icon.layoutParams = LayoutParams(dp(size + 2 * INSET), dp(size + 2 * INSET))
             icon.background = Ui.focusHighlight(context, corner + INSET)
         }
-        icon.setImageBitmap(bitmap)
-        IconBadges.apply(icon, locked, isNew, size + 2 * INSET, badge)
-        label.text = name
+        // Coming home binds every icon again; most have nothing new, and each change redraws it.
+        if (bitmap !== shownBitmap) {
+            shownBitmap = bitmap
+            icon.setImageBitmap(bitmap)
+        }
+        val marks = listOf(locked, isNew, size, badge)
+        if (marks != shownMarks) {
+            shownMarks = marks
+            IconBadges.apply(icon, locked, isNew, size + 2 * INSET, badge)
+        }
+        if (label.text.toString() != name) label.text = name
         label.visibility = if (showLabel) VISIBLE else GONE
         contentDescription = name
     }
+
+    private var shownBitmap: Bitmap? = null
+    private var shownMarks: List<Any>? = null
 
     /** The icon's bounds in this view, for the keypad highlight and drag image. */
     val iconView: ImageView get() = icon
@@ -83,9 +94,13 @@ class AppIconView(context: Context, val item: HomeItem) : LinearLayout(context) 
 
         /** The letter spacing for [name] in [room] px: a little closer when that makes it fit. */
         fun nameSpacing(paint: android.graphics.Paint, name: String, room: Float): Float {
-            fun width(spacing: Float) = android.text.TextPaint(paint).apply { letterSpacing = spacing }.measureText(name)
+            measuring.set(paint)
+            fun width(spacing: Float) = measuring.apply { letterSpacing = spacing }.measureText(name)
             return if (width(0f) > room && width(TIGHT) <= room) TIGHT else 0f
         }
+
+        /** A copy of the paint to measure with, made once rather than twice per name measured (on the main thread only). */
+        private val measuring = android.text.TextPaint()
 
         /** The home screen's icons, on pages and in the dock alike, as on iOS. */
         const val ICON = 62
@@ -152,9 +167,9 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
     /** Tapping the weather. */
     var onWeather: (() -> Unit)? = null
 
-    private val tick = object : android.content.BroadcastReceiver() {
-        override fun onReceive(c: Context, intent: android.content.Intent) = refresh()
-    }
+    private val tick = MinuteTick(this) { refresh() }
+    /** What the date and pills were last made from, so a minute that changes neither leaves them be. */
+    private var shownKey: Any? = null
 
     // Holding anywhere picks the clock up, on an event under the time too ([WholeHold]).
     private val hold = WholeHold(this)
@@ -217,35 +232,41 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
      * the hours over the minutes. The lines above and below it stay unless keeping them would make
      * the time much smaller than without them ([KEEP]); then the one under it goes first.
      */
+    // It only makes anything new when it has to fit the time again (new text or a new size).
+    @SuppressLint("DrawAllocation")
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         // As it's measured, so a clock being resized lays out once, at its new size.
         if (MeasureSpec.getMode(heightMeasureSpec) != MeasureSpec.UNSPECIFIED) pad(MeasureSpec.getSize(heightMeasureSpec))
         sizeFor(MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight)
         val choice = fitted?.takeIf { it.width == widthMeasureSpec && it.height == heightMeasureSpec }?.choice ?: run {
             val tall = MeasureSpec.getMode(heightMeasureSpec) != MeasureSpec.UNSPECIFIED
-            fun tries(lines: Boolean) = listOfNotNull(
-                fit(widthMeasureSpec, heightMeasureSpec, false, lines),
-                if (tall) fit(widthMeasureSpec, heightMeasureSpec, true, lines) else null,
-            ).maxByOrNull { it.px }
-            val whole = tries(lines = true)
-            val any = tries(lines = false)
+            val fits = listOfNotNull(
+                fit(widthMeasureSpec, heightMeasureSpec, false),
+                if (tall) fit(widthMeasureSpec, heightMeasureSpec, true) else null,
+            )
+            val whole = fits.mapNotNull { it.first }.maxByOrNull { it.px }
+            val any = fits.mapNotNull { it.second }.maxByOrNull { it.px }
             (if (whole != null && (any == null || whole.px >= any.px * KEEP)) whole else any) ?: Choice(false, MIN_SCALE, timePx * MIN_SCALE)
         }
         stack(choice.stacked)
         setTime(choice.px)
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
-        fitted = Fit(widthMeasureSpec, heightMeasureSpec, choice)
+        if (fitted?.choice !== choice) fitted = Fit(widthMeasureSpec, heightMeasureSpec, choice)
     }
 
     /**
-     * The time [stacked] or not at the largest scale at which it fits, keeping every line if
-     * [lines], else with lines left out as needed; null if nothing down to [MIN_SCALE] does.
+     * The time [stacked] or not at the largest scale at which it fits keeping every line, and at
+     * the largest at which it fits with lines left out as needed (one pass finds both: the second
+     * comes first or at the same scale); null where nothing down to [MIN_SCALE] does.
      */
-    private fun fit(widthMeasureSpec: Int, heightMeasureSpec: Int, stacked: Boolean, lines: Boolean): Choice? {
+    // Measuring itself at each size tried is the point: the layout's own measure, not its children's.
+    @SuppressLint("WrongCall")
+    private fun fit(widthMeasureSpec: Int, heightMeasureSpec: Int, stacked: Boolean): Pair<Choice?, Choice?>? {
         val height = MeasureSpec.getSize(heightMeasureSpec)
         val size = if (stacked) stackedPx else timePx
         stack(stacked)
         var scale = 1f
+        var any: Choice? = null
         while (scale >= MIN_SCALE - 0.001f) {
             setTime(size * scale)
             super.onMeasure(widthMeasureSpec, heightMeasureSpec)
@@ -259,10 +280,14 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
                 it.measuredHeight + lp.topMargin + lp.bottomMargin
             }
             val fits = MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED || used <= height
-            if (fits && (!lines || !cut)) return Choice(stacked, scale, size * scale)
+            if (fits) {
+                val choice = Choice(stacked, scale, size * scale)
+                if (any == null) any = choice
+                if (!cut) return choice to any
+            }
             scale -= 0.05f
         }
-        return null
+        return any?.let { null to it }
     }
 
     private fun stack(on: Boolean) {
@@ -281,17 +306,23 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        context.registerReceiver(tick, android.content.IntentFilter().apply {
-            addAction(android.content.Intent.ACTION_TIME_TICK)
-            addAction(android.content.Intent.ACTION_TIME_CHANGED)
-            addAction(android.content.Intent.ACTION_TIMEZONE_CHANGED)
-        })
+        tick.attach()
         refresh()
     }
 
     override fun onDetachedFromWindow() {
-        runCatching { context.unregisterReceiver(tick) }
+        tick.detach()
         super.onDetachedFromWindow()
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        tick.shown()
+    }
+
+    override fun onVisibilityAggregated(isVisible: Boolean) {
+        super.onVisibilityAggregated(isVisible)
+        if (isVisible) tick.shown()
     }
 
     /** The text's color: the card's, or white on the wallpaper. */
@@ -307,6 +338,7 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
         listOf(time, hours, minutes, day).forEach { shade(it) }
         sizedFor = 0
         fitted = null
+        shownKey = null
         refresh()
         requestLayout()
     }
@@ -335,11 +367,17 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
         place = lines.place
         // Each part stays whole: a long line breaks only between them. All in one color, and in
         // regular weight, the one Hebrew has too (its font has no medium).
-        day.text = (listOf(lines.date) + lines.detail?.split(" · ").orEmpty()).joinToString(" · ") { it.replace(' ', '\u00A0') }
-        day.setTextColor(main)
-        pills.removeAllViews()
+        val dayText = (listOf(lines.date) + lines.detail?.split(" · ").orEmpty()).joinToString(" · ") { it.replace(' ', '\u00A0') }
         // The same as Up next, the two most pressing: the clock is Up next with the time.
         val coming = lines.coming.take(2)
+        // Most minutes neither changes; then the clock stays as it is, fitted.
+        val key = listOf(dayText, main, lines.weather?.let { listOf(it.sky, it.night, it.temperature, it.description) },
+            coming.map { listOf(it.icon, it.text, it.time, it.tap, it.event?.id) }, place?.name)
+        if (key == shownKey) return
+        shownKey = key
+        day.text = dayText
+        day.setTextColor(main)
+        pills.removeAllViews()
         lines.weather?.let { w ->
             pills.addView(pill(WeatherArt.icon(w.sky, w.night), "${w.temperature}°  ${w.description}", tint = false).apply {
                 setOnClickListener { onWeather?.invoke() }

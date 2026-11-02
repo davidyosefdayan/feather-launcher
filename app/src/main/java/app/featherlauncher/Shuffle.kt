@@ -28,11 +28,17 @@ object Shuffle {
         DAY("Every day", 24 * 60 * 60_000L),
     }
 
-    private val io = Executors.newSingleThreadExecutor()
+    // Behind whatever's on screen: it runs as the phone wakes, while the lock screen animates.
+    private val io = Executors.newSingleThreadExecutor { work ->
+        Thread { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); work.run() }
+    }
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var busy = false
 
     private fun folder(context: Context) = File(context.filesDir, "shuffle")
+
+    /** The collections' photos, kept once downloaded, so the shuffle doesn't download one at every wake. */
+    private fun downloads(context: Context) = File(context.cacheDir, "shuffle")
 
     /** Your own photos in the shuffle, in order. */
     fun photos(context: Context): List<File> = folder(context).listFiles()?.filter { it.isFile }?.sortedBy { it.name }.orEmpty()
@@ -52,8 +58,11 @@ object Shuffle {
                 val bitmap = context.contentResolver.openInputStream(uri)?.use {
                     BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
                 } ?: return@runCatching
-                File(dir, "%03d.jpg".format(i)).outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+                // Kept cropped to the screen, so each change hands it to Android as it is.
+                val cropped = crop(bitmap, w, h)
                 bitmap.recycle()
+                File(dir, "%03d.jpg".format(i)).outputStream().use { cropped.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+                cropped.recycle()
             }
         }
         val ok = photos(context).isNotEmpty()
@@ -69,6 +78,7 @@ object Shuffle {
         prefs.shuffleCollection = collection
         prefs.shuffleIndex = -1
         prefs.shuffleLast = 0
+        downloads(context).deleteRecursively()
         // One wallpaper that changes by itself at a time, and none of the light and dark pair.
         WeatherWallpaper.stop(context)
         DarkMode.clearPair(context)
@@ -96,11 +106,10 @@ object Shuffle {
         busy = true
         io.execute {
             val (w, h) = screen(app)
-            val picture = if (ids != null) download("https://picsum.photos/id/${ids[index]}/$w/$h")
-            else BitmapFactory.decodeFile(photos(app)[index].path)?.let { crop(it, w, h) }
-            val ok = picture != null && runCatching {
-                WallpaperManager.getInstance(app).setBitmap(picture, null, true, WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK)
-            }.isSuccess
+            val file = if (ids != null) downloaded(app, ids[index], w, h) else photos(app)[index]
+            val ok = file != null && runCatching { set(app, file, w, h) }.isSuccess
+            // A download that turned out not to be a picture is fetched again next time.
+            if (!ok && ids != null) file?.delete()
             main.post {
                 busy = false
                 // Offline (a collection's photo didn't come): it tries again next time.
@@ -111,6 +120,45 @@ object Shuffle {
                 done?.invoke(ok)
             }
         }
+    }
+
+    /**
+     * Sets [file] as the wallpaper: as it is when it's already the screen's size (no decoding,
+     * scaling or encoding here), otherwise cropped to it first.
+     */
+    private fun set(context: Context, file: File, w: Int, h: Int) {
+        val manager = WallpaperManager.getInstance(context)
+        val flags = WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        if (bounds.outWidth == w && bounds.outHeight == h) {
+            file.inputStream().use { manager.setStream(it, null, true, flags) }
+        } else {
+            val picture = BitmapFactory.decodeFile(file.path)?.let { crop(it, w, h) } ?: error("Can't read ${file.name}")
+            manager.setBitmap(picture, null, true, flags)
+            picture.recycle()
+        }
+    }
+
+    /** Photo [id] of a collection at [w] by [h], downloaded the first time; null offline. */
+    private fun downloaded(context: Context, id: Int, w: Int, h: Int): File? {
+        val file = File(downloads(context).apply { mkdirs() }, "$id-${w}x$h.jpg")
+        if (file.exists()) return file
+        val part = File(file.path + ".part")
+        return runCatching {
+            (URL("https://picsum.photos/id/$id/$w/$h").openConnection() as HttpURLConnection).run {
+                connectTimeout = 10_000
+                readTimeout = 20_000
+                instanceFollowRedirects = true
+                inputStream.use { input -> part.outputStream().use { input.copyTo(it) } }
+            }
+            // A filter's or a hotspot's page in place of the photo isn't kept.
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(part.path, bounds)
+            check(bounds.outWidth > 0)
+            check(part.renameTo(file))
+            file
+        }.getOrElse { part.delete(); null }
     }
 
     /** [bitmap] scaled to cover [w] by [h], centered. */
@@ -129,13 +177,4 @@ object Shuffle {
         val m = context.resources.displayMetrics
         return m.widthPixels to m.heightPixels
     }
-
-    private fun download(url: String): Bitmap? = runCatching {
-        (URL(url).openConnection() as HttpURLConnection).run {
-            connectTimeout = 10_000
-            readTimeout = 20_000
-            instanceFollowRedirects = true
-            inputStream.use(BitmapFactory::decodeStream)
-        }
-    }.getOrNull()
 }

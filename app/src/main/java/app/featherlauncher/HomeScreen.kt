@@ -256,9 +256,6 @@ class HomeScreen(
         val now = System.currentTimeMillis()
         for (item in workspace.items) {
             val view = views[item.id] ?: createView(item)?.also { views[item.id] = it } ?: continue
-            (view as? ClockWidget)?.refresh()
-            (view as? AnalogClockWidget)?.refresh()
-            (view as? CardWidget)?.refresh()
             if (view is AppIconView) {
                 val showLabel = !item.inDock && prefs.showLabels
                 if (item.type == HomeItem.Type.FOLDER) {
@@ -288,6 +285,28 @@ class HomeScreen(
         }
         sizeDock()
         pages.updateFocusability()
+    }
+
+    /**
+     * Other apps' widgets are drawn once, in the light or dark mode the phone was in; they're made
+     * again ([applyTheme] then puts them back) so they take on the new one, as they would if the
+     * launcher had started in it.
+     */
+    fun remakeOtherWidgets() {
+        views.entries.filter { it.value is WidgetView }.map { it.key }.forEach { id ->
+            views.remove(id)?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        }
+    }
+
+    /**
+     * Feather's widgets look again at what they show, coming home (a setting may have changed);
+     * each changes only if something on it did. New ones do as they're added.
+     */
+    fun refreshWidgets() {
+        for (view in views.values) {
+            (view as? ClockWidget)?.refresh()
+            (view as? CardWidget)?.refresh()
+        }
     }
 
     /** The home screen's icons, the same on pages and in the dock; bigger with no names under them, smaller on a narrow screen. */
@@ -650,7 +669,17 @@ class HomeScreen(
     // region Folders
 
     /** The folder's icon: a tile in the icon shape with up to four of its apps inside. */
+    /** Each folder's picture and what it was drawn from; drawn again only when that changes, not at every return home. */
+    private val folderIcons = HashMap<Long, Pair<List<Any?>, Bitmap>>()
+
     private fun folderIcon(item: HomeItem): Bitmap {
+        val icons = item.apps.take(4).map { key -> repo.find(key)?.let(repo::icon) }
+        val from = listOf(prefs.iconShape, palette().folderFill, dp(64)) + icons.map { it?.let(System::identityHashCode) }
+        folderIcons[item.id]?.let { (drawnFrom, bitmap) -> if (drawnFrom == from) return bitmap }
+        return drawFolderIcon(icons).also { folderIcons[item.id] = from to it }
+    }
+
+    private fun drawFolderIcon(icons: List<Bitmap?>): Bitmap {
         val size = dp(64)
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -659,8 +688,8 @@ class HomeScreen(
         val gap = size * 0.07f
         val mini = (size - 2 * pad - gap) / 2
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        item.apps.take(4).forEachIndexed { i, key ->
-            val icon = repo.find(key)?.let(repo::icon) ?: return@forEachIndexed
+        icons.forEachIndexed { i, icon ->
+            if (icon == null) return@forEachIndexed
             val x = pad + (i % 2) * (mini + gap)
             val y = pad + (i / 2) * (mini + gap)
             canvas.drawBitmap(icon, null, RectF(x, y, x + mini, y + mini), paint)
@@ -1193,7 +1222,12 @@ class HomeScreen(
             val dockRect = rectInRoot(dock)
             val inDock = dockRect.contains(x.toInt(), y.toInt())
             // The dock lights up with an outline while the item is over it.
-            dockOutline?.animate()?.alpha(if (inDock && w == 1 && h == 1) 1f else 0f)?.setDuration(120)?.start()
+            // Only when it changes: a new fade on every move kept one running all through the drag.
+            val outline = if (inDock && w == 1 && h == 1) 1f else 0f
+            if (outline != dockOutlineTarget) {
+                dockOutlineTarget = outline
+                dockOutline?.animate()?.alpha(outline)?.setDuration(120)?.start()
+            }
             val page = when {
                 inDock && w == 1 && h == 1 -> Workspace.DOCK
                 inDock -> null
@@ -1240,6 +1274,8 @@ class HomeScreen(
         private var bottomZone: DropZone? = null
         private var pageOutline: DropZone? = null
         private var dockOutline: View? = null
+        /** The alpha [dockOutline] is fading to. */
+        private var dockOutlineTarget = -1f
 
         /**
          * While dragging, outlines appear and nothing else moves: one around the page, slivers of
@@ -1268,6 +1304,7 @@ class HomeScreen(
                 if (gravity == Gravity.END) rightMargin = sliver - dp(80) else leftMargin = sliver - dp(80)
             })
             val dockBox0 = rectInRoot(dock)
+            dockOutlineTarget = 0f
             dockOutline = View(activity).apply {
                 background = android.graphics.drawable.GradientDrawable().apply {
                     cornerRadius = dp(Ui.RADIUS_BAR).toFloat()

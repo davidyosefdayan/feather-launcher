@@ -69,7 +69,14 @@ object Zmanim {
      * When the sun reaches [zenith] on the day containing [day] where [place] is, rising or
      * setting; null when it doesn't (far north in summer). NOAA's method, two passes.
      */
-    fun sun(day: Long, place: ClockInfo.Place, zenith: Double, rising: Boolean): Long? {
+    fun sun(day: Long, place: ClockInfo.Place, zenith: Double, rising: Boolean): Long? =
+        sunMemo.get(SunKey(JewishCalendar.day(day, place.zone), place.lat, place.lon, place.zone.id, zenith, rising)) { sunOf(day, place, zenith, rising) }
+
+    /** The same day, place and angle always give the same time; the clock and widgets ask for it every minute. */
+    private data class SunKey(val day: Long, val lat: Double, val lon: Double, val zone: String, val zenith: Double, val rising: Boolean)
+    private val sunMemo = Memo<SunKey, Long?>(64)
+
+    private fun sunOf(day: Long, place: ClockInfo.Place, zenith: Double, rising: Boolean): Long? {
         val local = Calendar.getInstance(place.zone).apply { timeInMillis = day }
         val jd = julianDay(local.get(Calendar.YEAR), local.get(Calendar.MONTH) + 1, local.get(Calendar.DAY_OF_MONTH))
         // NOAA counts longitude positive to the west.

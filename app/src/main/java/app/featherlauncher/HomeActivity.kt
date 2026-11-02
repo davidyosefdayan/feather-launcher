@@ -97,6 +97,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { onBack() }
 
         prefs = Prefs(this)
+        shownNight = resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
         palette = currentPalette()
         Workspace.fitRows(this)
         repo = Launcher.repo(this)
@@ -139,12 +140,30 @@ class HomeActivity : Activity(), HomeScreen.Host {
         updateResults()
         applyTheme()
 
-        WallpaperManager.getInstance(this).addOnColorsChangedListener({ _, _ ->
-            if (prefs.colorStyle == ColorStyle.WALLPAPER) {
-                palette = currentPalette()
+        Palette.wallpaperChanged += wallpaperChanged
+    }
+
+    /**
+     * New wallpaper colors, if they make new colors here; while the home screen is hidden that's
+     * left to [onResume], so a wallpaper changing in the background doesn't make it all again.
+     */
+    private val wallpaperChanged = {
+        if (lifecycleStarted && prefs.colorStyle == ColorStyle.WALLPAPER) {
+            val next = currentPalette()
+            if (!next.sameAs(palette)) {
+                palette = next
                 applyTheme()
             }
-        }, Handler(mainLooper))
+        }
+    }
+    private var lifecycleStarted = false
+
+    override fun onDestroy() {
+        Palette.wallpaperChanged -= wallpaperChanged
+        contacts.close()
+        smartSearch.close()
+        if (::adapter.isInitialized) adapter.close()
+        super.onDestroy()
     }
 
     private fun currentPalette() = Palette.from(this, prefs.colorStyle, prefs.themeMode, prefs.accentColor)
@@ -153,9 +172,17 @@ class HomeActivity : Activity(), HomeScreen.Host {
         super.onConfigurationChanged(newConfig)
         // Light/dark mode switched while the launcher was running.
         palette = currentPalette()
+        val night = newConfig.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+        if (night != shownNight) {
+            shownNight = night
+            homeScreen.remakeOtherWidgets()
+        }
         applyTheme()
         applyDarkMode()
     }
+
+    /** The phone's light or dark mode that other apps' widgets were last made in. */
+    private var shownNight = 0
 
     /** Icons, the wallpaper dimming and the wallpaper pair, for the current light or dark mode. */
     /** The screen went off; the darkening comes back after the unlock (see [applyDarkMode]). */
@@ -214,6 +241,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     override fun onStart() {
         super.onStart()
+        lifecycleStarted = true
         widgets.startListening()
     }
 
@@ -271,20 +299,22 @@ class HomeActivity : Activity(), HomeScreen.Host {
     override fun onResume() {
         super.onResume()
         running = this
+        webSearch = null
         if (::smartSearch.isInitialized) preloadSearch()
         // Settings may have changed on the settings page.
         prefs.reload()
         WeatherWallpaper.refresh(this)
         Shuffle.next(this)
         val next = currentPalette()
-        // The wallpaper may have changed too, which changes the app list's colors.
-        if (next.accent != palette.accent || next.dark != palette.dark || next.drawer != palette.drawer) {
+        // The wallpaper may have changed too (while the home screen was hidden), which changes its colors.
+        if (!next.sameAs(palette)) {
             palette = next
             applyTheme()
         }
         repo.setShape(prefs.iconShape)
         applyDarkMode()
         homeScreen.bindAll()
+        homeScreen.refreshWidgets()
         focusDockStart()
         updateResults()
         watchLimits()
@@ -330,6 +360,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     override fun onStop() {
         super.onStop()
+        lifecycleStarted = false
         // The screen went off (the phone is locking): see applyDarkMode.
         if (!getSystemService(android.os.PowerManager::class.java).isInteractive) {
             dimAfterUnlock = true
@@ -490,6 +521,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         // Contacts and shortcuts are loaded ahead of time (on start and on return), so search opens
         // complete in one go; later changes only redraw if something actually changed.
         contacts.onLoaded = { if (searching) updateResults() }
+        contacts.onReloaded = adapter::forgetPhotos
         preloadSearch()
 
         // Closing follows the finger too: down on the app list, up on Smart Search.
@@ -574,7 +606,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
             this.search.hint = "Search apps, contacts and more"
             if (!search && category == null) category = visibleCategories().firstOrNull()?.id
             setPanelLook()
-            updateResults()
+            updateResults(force = true)
             panelAnimator?.cancel()
             drawer.animate().cancel()
             drawer.visibility = View.VISIBLE
@@ -782,8 +814,11 @@ class HomeActivity : Activity(), HomeScreen.Host {
     /** What the list was last showing; a refresh of the same thing keeps the scroll and highlight. */
     private var shownKey = ""
 
-    private fun updateResults(keepFocus: Boolean = true) {
+    private fun updateResults(keepFocus: Boolean = true, force: Boolean = false) {
         if (!::adapter.isInitialized) return
+        // Closed, there's nothing to show them in: they're made as the panel opens (every way of
+        // opening it asks), not each time the home screen shows or a notification comes.
+        if (drawer.visibility != View.VISIBLE && !force) return
         val key = "$searching|$showingHidden|$category|$chipCategory|${search.text}|${prefs.drawerCategories}"
         // Results arrive in stages (contacts, shortcuts, files); each refresh rebuilds the rows,
         // so the highlighted item is found again afterwards instead of being lost.
@@ -846,6 +881,10 @@ class HomeActivity : Activity(), HomeScreen.Host {
         adapter.set(rows, null)
     }
 
+    /** What the tabs and chips were last made for ([renderTabs], [renderChips]). */
+    private var tabsShown: Any? = null
+    private var chipsShown: Any? = null
+
     /** In the All apps view, the category picked from the chips; null shows every app. */
     private var chipCategory: String? = null
     private val chipsScroll by lazy {
@@ -863,8 +902,12 @@ class HomeActivity : Activity(), HomeScreen.Host {
     /** "All" and then every category, as pills; the chosen one is filled. */
     private fun renderChips(shown: List<Categories.Item>) {
         val chips = findViewById<LinearLayout>(R.id.chips)
-        chips.removeAllViews()
         val options = listOf<Categories.Item?>(null) + shown
+        // The same chips are left as they are.
+        val key = listOf(shown.map { listOf(it.id, it.name, it.iconRes, it.filledIconRes) }, chipCategory, palette)
+        if (key == chipsShown && chips.childCount == options.size) return
+        chipsShown = key
+        chips.removeAllViews()
         options.forEach { c ->
             val selected = c?.id == chipCategory
             val fg = if (selected) palette.drawer or 0xFF000000.toInt() else palette.onWall
@@ -899,6 +942,10 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     /** A search result with its standing for what's typed (see [SearchHistory.Ranker]). */
     private class Hit<T>(val item: T, val id: String, val points: Double)
+
+    /** Whether something can search the web; asked once per return to the home screen, not per letter. */
+    private var webSearch: Boolean? = null
+    private fun canSearchWeb(web: Intent) = webSearch ?: (packageManager.resolveActivity(web, 0) != null).also { webSearch = it }
 
     /**
      * Smart Search: a number to call, contacts, apps, app shortcuts, phone settings and files, each
@@ -951,8 +998,9 @@ class HomeActivity : Activity(), HomeScreen.Host {
         }.sortedByDescending { it.points }
         val appHits = if (!shows(SearchSection.APPS)) emptyList()
         else if (raw.isEmpty()) {
+            // Each app's count read once, not again for every comparison.
             repo.apps.filter { it.key !in prefs.hidden }
-                .sortedByDescending { prefs.launchCount(it.key) }
+                .map { it to prefs.launchCount(it.key) }.sortedByDescending { it.second }.map { it.first }
                 .let { if (pickingApp) it.sortedBy { e -> e.label.lowercase() } else it }
                 .map { Hit(it, "app:${it.key}", 0.0) }
         } else {
@@ -1040,7 +1088,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
         // Last, the same words searched on the web, if the phone has something to search it with.
         val web = Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, raw)
-        if (raw.isNotEmpty() && shows(SearchSection.WEB) && packageManager.resolveActivity(web, 0) != null) {
+        if (raw.isNotEmpty() && shows(SearchSection.WEB) && canSearchWeb(web)) {
             title(SearchSection.WEB.title)
             rows += DrawerAdapter.Row.Result(Found(raw, "Search the web", "web", iconRes = R.drawable.ic_search) { startSafely(web) })
         }
@@ -1069,13 +1117,21 @@ class HomeActivity : Activity(), HomeScreen.Host {
     /** The category icons along the bottom; long-press one to edit it. */
     private fun renderTabs(shown: List<Categories.Item>) {
         val tabs = findViewById<LinearLayout>(R.id.tabs)
+        // Categories holding an app that's new and not opened yet get a dot, like the app itself.
+        val withNew = repo.apps.filter { newApps.isNew(it) && it.key !in prefs.hidden }.map { categories.of(it) }.toSet()
+        // Opening the app list asks every time; the same tabs are left as they are (a tab let go
+        // of where it was picked up goes back into line).
+        val key = listOf(shown.map { listOf(it.id, it.name, it.iconRes, it.filledIconRes) }, category, showingHidden, withNew, palette)
+        if (key == tabsShown && tabs.childCount == shown.size) {
+            for (i in 0 until tabs.childCount) tabs.getChildAt(i).translationX = 0f
+            return
+        }
+        tabsShown = key
         // Same proportions as the dock: its corner is the same share of its height.
         tabs.background = Ui.rounded(this, palette.glass, Ui.RADIUS_BAR * TAB_BAR_HEIGHT / Ui.DOCK_HEIGHT, palette.hairline)
         tabs.removeAllViews()
         // Tabs share the bar's width; with more than fit, they keep a minimum size and the bar scrolls.
         val fits = shown.size <= MAX_FITTING_TABS
-        // Categories holding an app that's new and not opened yet get a dot, like the app itself.
-        val withNew = repo.apps.filter { newApps.isNew(it) && it.key !in prefs.hidden }.map { categories.of(it) }.toSet()
         shown.forEach { c ->
             val selected = c.id == category && !showingHidden
             tabs.addView(FrameLayout(this).apply {

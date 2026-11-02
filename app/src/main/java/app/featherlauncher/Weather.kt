@@ -28,6 +28,9 @@ object Weather {
 
     @Volatile private var cached: Triple<String, Long, Now>? = null
     @Volatile private var loading = false
+    /** Where and when loading last failed: offline, it tries again after [RETRY], not at every look. */
+    @Volatile private var failed: Pair<String, Long>? = null
+    private const val RETRY = 60_000L
 
     val fahrenheit get() = Locale.getDefault().country in setOf("US", "LR", "MM", "BS", "BZ", "KY", "PW", "FM", "MH")
 
@@ -38,11 +41,13 @@ object Weather {
     fun at(place: ClockInfo.Place, loaded: () -> Unit): Now? {
         val key = "%.2f,%.2f,%b".format(Locale.US, place.lat, place.lon, fahrenheit)
         val known = cached?.takeIf { it.first == key }
-        if ((known == null || System.currentTimeMillis() - known.second > FRESH) && !loading) {
+        val time = System.currentTimeMillis()
+        if ((known == null || time - known.second > FRESH) && !loading && failed?.let { (at, t) -> at == key && time - t in 0 until RETRY } != true) {
             loading = true
             Thread {
                 val now = runCatching { fetch(place) }.getOrNull()
                 loading = false
+                if (now == null) failed = key to System.currentTimeMillis()
                 if (now != null) {
                     cached = Triple(key, System.currentTimeMillis(), now)
                     main.post(loaded)

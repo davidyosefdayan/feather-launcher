@@ -12,4 +12,10 @@
     <item name="fit_priority" type="id" />
     <!-- Something inside a widget made ready for the keypad highlight. -->
     <item name="key_target" type="id" />
+    <!-- On an app list row: the colors it was made in; a row is used again only in the same ones. -->
+    <item name="drawer_palette" type="id" />
+    <!-- On a contact's picture: the picture it's waiting for, read in the background. -->
+    <item name="drawer_photo" type="id" />
+    <!-- On a wallpaper tile: the photo it shows, read once it's near the screen. -->
+    <item name="wallpaper_thumb" type="id" />
 </resources>

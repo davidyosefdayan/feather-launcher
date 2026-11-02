@@ -23,15 +23,19 @@ data class NotificationFilter(
         if (!enabled || (app != null && app != pkg) || (during != null && during !in on)) return false
         // No words: everything from the app.
         if (words.isEmpty()) return true
-        val mentioned = words.any { word ->
-            // A word written /like this/ is a pattern, as in NotiFilter; anything else is plain text.
-            if (word.length > 2 && word.startsWith('/') && word.endsWith('/')) {
-                runCatching { Regex(word.substring(1, word.length - 1), RegexOption.IGNORE_CASE).containsMatchIn(text) }.getOrDefault(false)
-            } else {
-                text.contains(word, ignoreCase = true)
-            }
+        val mentioned = words.indices.any { i ->
+            val word = words[i]
+            if (isPattern(word)) patterns[i]?.containsMatchIn(text) == true else text.contains(word, ignoreCase = true)
         }
         return if (allowOnly) !mentioned else mentioned
+    }
+
+    /** A word written /like this/ is a pattern, as in NotiFilter; anything else is plain text. */
+    private fun isPattern(word: String) = word.length > 2 && word.startsWith('/') && word.endsWith('/')
+
+    /** The patterns among [words], made once rather than for every notification; null for plain words and broken patterns. */
+    private val patterns by lazy {
+        words.map { word -> if (isPattern(word)) runCatching { Regex(word.substring(1, word.length - 1), RegexOption.IGNORE_CASE) }.getOrNull() else null }
     }
 
     fun toJson(): JSONObject = JSONObject()
@@ -86,19 +90,24 @@ class NotificationFilters private constructor(context: Context) {
 
     fun remove(id: Long) = saveFilters(filters.filter { it.id != id })
 
-    /** Newest first. */
+    /** Newest first. Read once, then kept up in memory as notifications are hidden. */
     val history: List<HiddenNotification>
-        get() {
+        get() = historyList ?: run {
             val array = runCatching { JSONArray(sp.getString("history", "[]")) }.getOrDefault(JSONArray())
-            return (0 until array.length()).map { HiddenNotification.fromJson(array.getJSONObject(it)) }
+            (0 until array.length()).map { HiddenNotification.fromJson(array.getJSONObject(it)) }.also { historyList = it }
         }
+    @Volatile private var historyList: List<HiddenNotification>? = null
 
     fun remember(hidden: HiddenNotification) {
         val next = (listOf(hidden) + history).take(HISTORY_SIZE)
+        historyList = next
         sp.edit().putString("history", JSONArray(next.map { it.toJson() }).toString()).apply()
     }
 
-    fun clearHistory() = sp.edit().remove("history").apply()
+    fun clearHistory() {
+        historyList = emptyList()
+        sp.edit().remove("history").apply()
+    }
 
     companion object {
         private const val HISTORY_SIZE = 100

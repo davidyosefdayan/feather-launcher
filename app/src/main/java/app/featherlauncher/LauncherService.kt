@@ -32,8 +32,10 @@ class LauncherService : AccessibilityService() {
         // Weather wallpaper catches up too, before the lock screen is looked at.
         override fun onReceive(context: Context, intent: Intent) {
             check()
+            // The rest once per wake, as the screen turns on, not again at the unlock.
+            if (intent.action != Intent.ACTION_SCREEN_ON) return
             WeatherWallpaper.refresh(context)
-            if (intent.action == Intent.ACTION_SCREEN_ON) Shuffle.next(context, screenOn = true)
+            Shuffle.next(context, screenOn = true)
             // Filters catch any permanent notification that came back while the phone slept.
             NotificationService.refilter()
         }
@@ -113,6 +115,8 @@ class LauncherService : AccessibilityService() {
 
         val digit = if (code in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) code - KeyEvent.KEYCODE_0 else null
         if (digit != null) {
+            // In other apps, a number that isn't set is the app's; that's known without asking Android anything.
+            if (home == null && KeyShortcuts.get(this).digit(digit) == null) return false
             // On the lock screen, numbers type the PIN.
             if (getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked) return false
             if (home != null) {

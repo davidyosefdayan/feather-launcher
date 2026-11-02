@@ -95,6 +95,9 @@ class AppRepository(private val context: Context, shape: IconShape) {
 
     private fun rebuildIcons() {
         iconDir = iconDirFor(shape)
+        // Before the cached list is read, there's nothing to redraw: start reads the new look's
+        // icons from its own folder, and draws only the ones that aren't there yet.
+        if (!started) return
         io.execute {
             val cached = apps.mapNotNull { e -> decodeIcon(e.key)?.let { e.key to it } }.toMap()
             reload(cached)

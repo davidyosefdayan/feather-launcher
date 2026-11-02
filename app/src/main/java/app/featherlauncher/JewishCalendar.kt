@@ -40,7 +40,11 @@ object JewishCalendar {
     // region Holidays
 
     /** What [day] is, if anything: "Rosh Chodesh Kislev", "Chanukah · day 3", "Shavuos". */
-    fun holidays(day: Long, israel: Boolean): List<String> {
+    fun holidays(day: Long, israel: Boolean): List<String> = holidayMemo.get(day to israel) { holidaysOf(day, israel) }
+
+    private val holidayMemo = Memo<Pair<Long, Boolean>, List<String>>(32)
+
+    private fun holidaysOf(day: Long, israel: Boolean): List<String> {
         val h = hebrew(day)
         val w = weekday(day)
         val (y, m, d) = h
@@ -268,7 +272,11 @@ object JewishCalendar {
     }
 
     /** The parsha read on Shabbos [shabbos] ("Tazria-Metzora"), or null when it's Yom Tov or Chol Hamoed. */
-    fun parsha(shabbos: Long, israel: Boolean): String? {
+    fun parsha(shabbos: Long, israel: Boolean): String? = parshaMemo.get(shabbos to israel) { parshaOf(shabbos, israel) }
+
+    private val parshaMemo = Memo<Pair<Long, Boolean>, String?>(8)
+
+    private fun parshaOf(shabbos: Long, israel: Boolean): String? {
         if (festival(shabbos, israel)) return null
         val h = hebrew(shabbos)
         // The cycle starts the Shabbos after Simchas Torah; before it in Tishrei, it's last year's.

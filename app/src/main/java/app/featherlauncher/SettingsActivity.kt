@@ -713,21 +713,29 @@ class SettingsActivity : Activity() {
         overlays.showSheet("Backup and restore", column)
     }
 
-    private fun saveBackup(uri: android.net.Uri) {
+    // Saving and reading a backup happen in the background: with the wallpaper pair in it, it can
+    // be megabytes.
+    private fun saveBackup(uri: android.net.Uri) = Thread {
         val ok = runCatching {
             contentResolver.openOutputStream(uri, "wt")!!.use { it.write(Backup.export(this).toByteArray()) }
         }.isSuccess
-        android.widget.Toast.makeText(this, if (ok) "Backup saved" else "Couldn't save the backup", android.widget.Toast.LENGTH_SHORT).show()
-    }
+        runOnUiThread {
+            android.widget.Toast.makeText(this, if (ok) "Backup saved" else "Couldn't save the backup", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }.start()
+
+    private fun confirmRestore(uri: android.net.Uri) = Thread {
+        val backup = runCatching { contentResolver.openInputStream(uri)!!.use { it.readBytes().toString(Charsets.UTF_8) } }.getOrNull()
+        val saved = backup?.takeIf(Backup::isBackup)?.let { org.json.JSONObject(it).optLong("saved") }
+        runOnUiThread { if (!isDestroyed) confirmRestore(backup, saved) }
+    }.start()
 
     /** Asks before replacing everything, showing when the backup was made. */
-    private fun confirmRestore(uri: android.net.Uri) {
-        val backup = runCatching { contentResolver.openInputStream(uri)!!.use { it.readBytes().toString(Charsets.UTF_8) } }.getOrNull()
-        if (backup == null || !Backup.isBackup(backup)) {
+    private fun confirmRestore(backup: String?, saved: Long?) {
+        if (backup == null || saved == null) {
             android.widget.Toast.makeText(this, "That isn't a Feather Launcher backup", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
-        val saved = org.json.JSONObject(backup).optLong("saved")
         val p = palette
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
