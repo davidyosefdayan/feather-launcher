@@ -159,6 +159,9 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     override fun onDestroy() {
         Palette.wallpaperChanged -= wallpaperChanged
+        contacts.close()
+        smartSearch.close()
+        if (::adapter.isInitialized) adapter.close()
         super.onDestroy()
     }
 
@@ -509,6 +512,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         // Contacts and shortcuts are loaded ahead of time (on start and on return), so search opens
         // complete in one go; later changes only redraw if something actually changed.
         contacts.onLoaded = { if (searching) updateResults() }
+        contacts.onReloaded = adapter::forgetPhotos
         preloadSearch()
 
         // Closing follows the finger too: down on the app list, up on Smart Search.

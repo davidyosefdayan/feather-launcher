@@ -913,13 +913,22 @@ class MediaWidget(context: Context, item: HomeItem) : CardWidget(context, item) 
         pad(dp(GAP + 14), dp(GAP + 12), dp(GAP + 14), dp(GAP + 12))
     }
 
+    /** Hearing about players coming and going; possible only with notification access, which may come later. */
+    private var listening = false
+
+    private fun listen() {
+        if (listening || !isAttachedToWindow) return
+        listening = runCatching { sessions.addOnActiveSessionsChangedListener(sessionsChanged, listener) }.isSuccess
+    }
+
     override fun onAttachedToWindow() {
-        runCatching { sessions.addOnActiveSessionsChangedListener(sessionsChanged, listener) }
         super.onAttachedToWindow()
+        listen()
     }
 
     override fun onDetachedFromWindow() {
         runCatching { sessions.removeOnActiveSessionsChangedListener(sessionsChanged) }
+        listening = false
         controller?.unregisterCallback(changed)
         controller = null
         super.onDetachedFromWindow()
@@ -932,6 +941,7 @@ class MediaWidget(context: Context, item: HomeItem) : CardWidget(context, item) 
                 "Allow notification access to control what's playing") { allow(Setup.NOTIFICATIONS) }
         }
         setOnClickListener(null)
+        listen()
         // The one playing, else the last one that was.
         val all = runCatching { sessions.getActiveSessions(listener) }.getOrDefault(emptyList())
         val c = all.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING } ?: all.firstOrNull { it.metadata != null }
@@ -947,10 +957,10 @@ class MediaWidget(context: Context, item: HomeItem) : CardWidget(context, item) 
                 ?: it.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
         }
         // Players report often (where they are in the song); most reports change nothing shown.
-        // The artwork comes as a new bitmap each time, so its size and middle pixel stand in for it.
+        // The artwork comes as a new bitmap each time, so its size and a few of its pixels stand in for it.
         if (same(listOf(narrow, c?.sessionToken, playing, meta?.getString(MediaMetadata.METADATA_KEY_TITLE),
                 meta?.getString(MediaMetadata.METADATA_KEY_ARTIST), meta?.getString(MediaMetadata.METADATA_KEY_ALBUM),
-                art?.let { listOf(it.width, it.height, runCatching { it.getPixel(it.width / 2, it.height / 2) }.getOrNull()) }))) return
+                art?.let(::sample)))) return
         content.removeAllViews()
         content.gravity = Gravity.CENTER_VERTICAL
         // With artwork, the card is a deep shade of its color, with white type; without, the usual card.
@@ -1024,6 +1034,11 @@ class MediaWidget(context: Context, item: HomeItem) : CardWidget(context, item) 
         }
     }
 
+    /** The artwork's size and nine of its pixels, to tell one picture from another without comparing them whole. */
+    private fun sample(art: android.graphics.Bitmap) = runCatching {
+        listOf(art.width, art.height) + (1..3).flatMap { y -> (1..3).map { x -> art.getPixel(art.width * x / 4, art.height * y / 4) } }
+    }.getOrNull()
+
     /** A deep, rich shade of the artwork's overall color, dark enough for white type. */
     private fun shadeOf(art: android.graphics.Bitmap): Int {
         val average = runCatching { android.graphics.Bitmap.createScaledBitmap(art, 1, 1, true).getPixel(0, 0) }.getOrDefault(0xFF333333.toInt())
@@ -1067,7 +1082,6 @@ class ZmanimWidget(context: Context, item: HomeItem) : CardWidget(context, item)
         val place = info.place { if (isAttachedToWindow) refresh() }
         val zmanim = Prefs(context).dailyZmanim
         if (place == null) {
-            content.gravity = Gravity.TOP
             return prompt(R.drawable.ic_sunrise, if (zmanim) "Zmanim" else "Sunrise and sunset",
                 if (zmanim) "Set your location to see today's zmanim" else "Set your location to see today's times", ::chooseLocation)
         }

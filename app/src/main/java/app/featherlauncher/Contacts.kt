@@ -49,14 +49,25 @@ class Contacts(private val context: Context) {
     private var loading = false
     /** Contacts or calls changed since they were last read (or they never were). */
     @Volatile private var stale = true
-    private var watching = false
+    private val observer = object : android.database.ContentObserver(main) {
+        override fun onChange(selfChange: Boolean) { stale = true }
+    }
+    private var watchingContacts = false
+    private var watchingCalls = false
+    /** Whether the call history could be read at the last load; once it can, it's loaded again with it. */
+    private var readCalls = false
+    /** Runs on the main thread after every load, changed or not (pictures may have changed). */
+    var onReloaded: (() -> Unit)? = null
 
     val allowed get() = context.checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
 
+    private val callsAllowed get() = context.checkSelfPermission(Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
+
     fun load() {
-        if (!allowed || loading || !stale) return
+        if (!allowed || loading || !(stale || callsAllowed != readCalls)) return
         loading = true
         stale = false
+        readCalls = callsAllowed
         watch()
         io.execute {
             // Every number per person, the primary one first.
@@ -121,6 +132,7 @@ class Contacts(private val context: Context) {
                 this.calls = calls
                 all = next
                 loading = false
+                onReloaded?.invoke()
                 if (changed) onLoaded?.invoke()
             }
         }
@@ -128,13 +140,18 @@ class Contacts(private val context: Context) {
 
     /** Watches the contacts and the call history, so a change is read the next time the home screen shows. */
     private fun watch() {
-        if (watching) return
-        watching = true
-        val observer = object : android.database.ContentObserver(main) {
-            override fun onChange(selfChange: Boolean) { stale = true }
-        }
-        runCatching { context.contentResolver.registerContentObserver(android.provider.ContactsContract.AUTHORITY_URI, true, observer) }
-        runCatching { context.contentResolver.registerContentObserver(CallLog.Calls.CONTENT_URI, true, observer) }
+        if (!watchingContacts) watchingContacts = runCatching {
+            context.contentResolver.registerContentObserver(android.provider.ContactsContract.AUTHORITY_URI, true, observer)
+        }.isSuccess
+        if (!watchingCalls && callsAllowed) watchingCalls = runCatching {
+            context.contentResolver.registerContentObserver(CallLog.Calls.CONTENT_URI, true, observer)
+        }.isSuccess
+    }
+
+    /** The home screen is going away: stops watching. */
+    fun close() {
+        context.contentResolver.unregisterContentObserver(observer)
+        io.shutdown()
     }
 
     /** Matches by name (letters or T9) and, for digits, by phone number too. */

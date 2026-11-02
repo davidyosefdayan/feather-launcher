@@ -103,6 +103,23 @@ class SmartSearch(private val context: Context, private val start: (Intent) -> U
     /** Apps or their shortcuts changed since they were last read (or they never were). */
     @Volatile private var shortcutsStale = true
     private var watchingShortcuts = false
+    private val appsChanged = object : LauncherApps.Callback() {
+        override fun onPackageRemoved(packageName: String, user: android.os.UserHandle) { shortcutsStale = true }
+        override fun onPackageAdded(packageName: String, user: android.os.UserHandle) { shortcutsStale = true }
+        override fun onPackageChanged(packageName: String, user: android.os.UserHandle) { shortcutsStale = true }
+        override fun onPackagesAvailable(packageNames: Array<out String>, user: android.os.UserHandle, replacing: Boolean) { shortcutsStale = true }
+        override fun onPackagesUnavailable(packageNames: Array<out String>, user: android.os.UserHandle, replacing: Boolean) { shortcutsStale = true }
+        override fun onShortcutsChanged(packageName: String, shortcuts: MutableList<android.content.pm.ShortcutInfo>, user: android.os.UserHandle) {
+            shortcutsStale = true
+        }
+    }
+
+    /** The home screen is going away: stops watching. */
+    fun close() {
+        if (watchingShortcuts) launcherApps.unregisterCallback(appsChanged)
+        mediaSearch?.let(main::removeCallbacks)
+        io.shutdown()
+    }
 
     /** Loads every app's shortcuts in the background (only the default home app may see them), when they've changed. */
     fun loadShortcuts(appName: (String) -> String?, done: () -> Unit) {
@@ -110,16 +127,7 @@ class SmartSearch(private val context: Context, private val start: (Intent) -> U
         shortcutsStale = false
         if (!watchingShortcuts) {
             watchingShortcuts = true
-            launcherApps.registerCallback(object : LauncherApps.Callback() {
-                override fun onPackageRemoved(packageName: String, user: android.os.UserHandle) { shortcutsStale = true }
-                override fun onPackageAdded(packageName: String, user: android.os.UserHandle) { shortcutsStale = true }
-                override fun onPackageChanged(packageName: String, user: android.os.UserHandle) { shortcutsStale = true }
-                override fun onPackagesAvailable(packageNames: Array<out String>, user: android.os.UserHandle, replacing: Boolean) { shortcutsStale = true }
-                override fun onPackagesUnavailable(packageNames: Array<out String>, user: android.os.UserHandle, replacing: Boolean) { shortcutsStale = true }
-                override fun onShortcutsChanged(packageName: String, shortcuts: MutableList<android.content.pm.ShortcutInfo>, user: android.os.UserHandle) {
-                    shortcutsStale = true
-                }
-            }, main)
+            launcherApps.registerCallback(appsChanged, main)
         }
         io.execute {
             val query = LauncherApps.ShortcutQuery().setQueryFlags(

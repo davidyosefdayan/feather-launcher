@@ -30,7 +30,7 @@ object Weather {
     @Volatile private var loading = false
     /** Where and when loading last failed: offline, it tries again after [RETRY], not at every look. */
     @Volatile private var failed: Pair<String, Long>? = null
-    private const val RETRY = 10 * 60_000L
+    private const val RETRY = 60_000L
 
     val fahrenheit get() = Locale.getDefault().country in setOf("US", "LR", "MM", "BS", "BZ", "KY", "PW", "FM", "MH")
 

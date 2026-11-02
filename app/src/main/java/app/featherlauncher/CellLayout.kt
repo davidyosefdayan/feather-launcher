@@ -266,6 +266,8 @@ class CellLayout(context: Context, attrs: AttributeSet? = null) : ViewGroup(cont
         val lp = view.layoutParams as? LayoutParams
         if (view.parent === this && lp != null) {
             lp.x = x; lp.y = y; lp.w = w; lp.h = h
+            // On top, as when it was put back: a widget being resized draws over neighbours moving aside.
+            if (indexOfChild(view) != childCount - 1) bringChildToFront(view)
             view.requestLayout()
             invalidate()
             return

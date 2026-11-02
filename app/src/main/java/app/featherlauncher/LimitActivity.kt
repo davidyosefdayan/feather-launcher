@@ -37,11 +37,14 @@ class LimitActivity : Activity() {
     /** When the wait started (elapsed realtime), or 0 when not waiting. */
     private var waitStarted = 0L
 
+    /** When [update] next has something new to show: soon while the wait's bar fills, otherwise as the next second turns. */
+    private var nextTick = 1000L
+
     /** Smoothly while the wait's bar fills, otherwise once a second: nothing else on it moves faster. */
     private val tick = object : Runnable {
         override fun run() {
             update()
-            button.postDelayed(this, if (waitStarted != 0L) 100 else 1000 - System.currentTimeMillis() % 1000)
+            button.postDelayed(this, nextTick)
         }
     }
 
@@ -190,12 +193,15 @@ class LimitActivity : Activity() {
         // A limit that's on all day, every day, never ends; others say when they do.
         until.show(if (limit.allDay && limit.days == AppLimits.ALL_DAYS) limit.name
             else limit.endsAt(now)?.let { "${limit.name} until ${AppLimits.formatTime(this, it)}" } ?: limit.name)
+        nextTick = 1000 - now % 1000
         if (limit.strictness == Strictness.BLOCK) return
         val ready = limits.readyAt(pkg, limit)
         val minutes = limit.openMinutes
         when {
             now < ready -> {
                 val left = ((ready - now + 999) / 1000).toInt()
+                // The countdown turns over on the wait's own seconds, not the clock's.
+                nextTick = (ready - now - 1) % 1000 + 1
                 button.show("Can open again in %d:%02d".format(left / 60, left % 60))
                 button.alpha = 0.6f
                 progress.level = 0
@@ -208,6 +214,7 @@ class LimitActivity : Activity() {
                     return openApp()
                 }
                 val left = ((total - elapsed + 999) / 1000).toInt()
+                nextTick = 100
                 button.show("Opening in $left sec · Tap to cancel")
                 button.alpha = 1f
                 progress.level = (elapsed * 10000 / total).toInt()

@@ -360,6 +360,11 @@ class DrawerAdapter(
     }
 
     private val photos = android.util.LruCache<android.net.Uri, Bitmap>(PHOTOS)
+
+    /** Contacts were read again: a picture may have changed at the same address. */
+    fun forgetPhotos() = photos.evictAll()
+
+    fun close() = photoIo.shutdown()
     private val photoIo = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
 

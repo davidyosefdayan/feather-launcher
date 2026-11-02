@@ -108,6 +108,8 @@ object Shuffle {
             val (w, h) = screen(app)
             val file = if (ids != null) downloaded(app, ids[index], w, h) else photos(app)[index]
             val ok = file != null && runCatching { set(app, file, w, h) }.isSuccess
+            // A download that turned out not to be a picture is fetched again next time.
+            if (!ok && ids != null) file?.delete()
             main.post {
                 busy = false
                 // Offline (a collection's photo didn't come): it tries again next time.
@@ -150,6 +152,10 @@ object Shuffle {
                 instanceFollowRedirects = true
                 inputStream.use { input -> part.outputStream().use { input.copyTo(it) } }
             }
+            // A filter's or a hotspot's page in place of the photo isn't kept.
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(part.path, bounds)
+            check(bounds.outWidth > 0)
             check(part.renameTo(file))
             file
         }.getOrElse { part.delete(); null }
