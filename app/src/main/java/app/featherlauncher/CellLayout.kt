@@ -131,9 +131,16 @@ class CellLayout(context: Context, attrs: AttributeSet? = null) : ViewGroup(cont
         }
     }
 
+    @android.annotation.SuppressLint("DrawAllocation") // A new grid only when it's changed (below).
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         // A page's grid, for drawing widgets at their real sizes (see [WidgetSheet]) and sizing new ones.
-        if (isPage && cellWidth > 0 && cellHeight > 0) grid = Grid(cellWidth, cellHeight, icon, Ui.dp(context, CardWidget.GAP))
+        if (isPage && cellWidth > 0 && cellHeight > 0) {
+            // A new one only when it's changed: every page lays out each minute (the clock's time).
+            val known = grid
+            if (known == null || known.cellWidth != cellWidth || known.cellHeight != cellHeight || known.icon != icon) {
+                grid = Grid(cellWidth, cellHeight, icon, Ui.dp(context, CardWidget.GAP))
+            }
+        }
         for (i in 0 until childCount) {
             val child = getChildAt(i)
             val rect = childRect(child)

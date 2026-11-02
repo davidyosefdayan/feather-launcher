@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.graphics.Rect
 import android.graphics.RectF
 import android.view.Gravity
 import android.view.View
@@ -56,7 +55,7 @@ class DropZone(
     override fun onDraw(canvas: Canvas) {
         val inset = stroke.strokeWidth / 2
         val r = Ui.dp(context, radiusDp).toFloat()
-        val box = RectF(inset, inset, width - inset, height - inset)
+        box.set(inset, inset, width - inset, height - inset)
         // Faint base, then a fill that grows with the hold.
         // Empty until held over, then fills up.
         fill.alpha = (progress * 0x4D).toInt()
@@ -67,10 +66,13 @@ class DropZone(
     /** Whether the point (window coordinates) is over this target. */
     fun contains(x: Float, y: Float): Boolean {
         if (!isAttachedToWindow) return false
-        val location = IntArray(2)
         getLocationInWindow(location)
-        return Rect(location[0], location[1], location[0] + width, location[1] + height).contains(x.toInt(), y.toInt())
+        return x.toInt() in location[0] until location[0] + width && y.toInt() in location[1] until location[1] + height
     }
+
+    // Made once: drawing happens every frame of a fill, and the drag asks [contains] at every move.
+    private val box = RectF()
+    private val location = IntArray(2)
 
     fun hover(over: Boolean) {
         if (over == hovering) return

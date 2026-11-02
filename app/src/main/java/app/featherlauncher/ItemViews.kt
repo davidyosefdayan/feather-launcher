@@ -232,6 +232,8 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
      * the hours over the minutes. The lines above and below it stay unless keeping them would make
      * the time much smaller than without them ([KEEP]); then the one under it goes first.
      */
+    // It only makes anything new when it has to fit the time again (new text or a new size).
+    @SuppressLint("DrawAllocation")
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         // As it's measured, so a clock being resized lays out once, at its new size.
         if (MeasureSpec.getMode(heightMeasureSpec) != MeasureSpec.UNSPECIFIED) pad(MeasureSpec.getSize(heightMeasureSpec))
@@ -249,7 +251,7 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
         stack(choice.stacked)
         setTime(choice.px)
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
-        fitted = Fit(widthMeasureSpec, heightMeasureSpec, choice)
+        if (fitted?.choice !== choice) fitted = Fit(widthMeasureSpec, heightMeasureSpec, choice)
     }
 
     /**
@@ -257,6 +259,8 @@ class ClockWidget(context: Context, val item: HomeItem) : FitColumn(context) {
      * the largest at which it fits with lines left out as needed (one pass finds both: the second
      * comes first or at the same scale); null where nothing down to [MIN_SCALE] does.
      */
+    // Measuring itself at each size tried is the point: the layout's own measure, not its children's.
+    @SuppressLint("WrongCall")
     private fun fit(widthMeasureSpec: Int, heightMeasureSpec: Int, stacked: Boolean): Pair<Choice?, Choice?>? {
         val height = MeasureSpec.getSize(heightMeasureSpec)
         val size = if (stacked) stackedPx else timePx
