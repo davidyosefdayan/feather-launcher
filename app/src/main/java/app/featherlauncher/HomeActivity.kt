@@ -139,12 +139,27 @@ class HomeActivity : Activity(), HomeScreen.Host {
         updateResults()
         applyTheme()
 
-        WallpaperManager.getInstance(this).addOnColorsChangedListener({ _, _ ->
-            if (prefs.colorStyle == ColorStyle.WALLPAPER) {
-                palette = currentPalette()
+        Palette.wallpaperChanged += wallpaperChanged
+    }
+
+    /**
+     * New wallpaper colors, if they make new colors here; while the home screen is hidden that's
+     * left to [onResume], so a wallpaper changing in the background doesn't make it all again.
+     */
+    private val wallpaperChanged = {
+        if (lifecycleStarted && prefs.colorStyle == ColorStyle.WALLPAPER) {
+            val next = currentPalette()
+            if (!next.sameAs(palette)) {
+                palette = next
                 applyTheme()
             }
-        }, Handler(mainLooper))
+        }
+    }
+    private var lifecycleStarted = false
+
+    override fun onDestroy() {
+        Palette.wallpaperChanged -= wallpaperChanged
+        super.onDestroy()
     }
 
     private fun currentPalette() = Palette.from(this, prefs.colorStyle, prefs.themeMode, prefs.accentColor)
@@ -214,6 +229,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     override fun onStart() {
         super.onStart()
+        lifecycleStarted = true
         widgets.startListening()
     }
 
@@ -278,8 +294,8 @@ class HomeActivity : Activity(), HomeScreen.Host {
         WeatherWallpaper.refresh(this)
         Shuffle.next(this)
         val next = currentPalette()
-        // The wallpaper may have changed too, which changes the app list's colors.
-        if (next.accent != palette.accent || next.dark != palette.dark || next.drawer != palette.drawer) {
+        // The wallpaper may have changed too (while the home screen was hidden), which changes its colors.
+        if (!next.sameAs(palette)) {
             palette = next
             applyTheme()
         }
@@ -332,6 +348,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     override fun onStop() {
         super.onStop()
+        lifecycleStarted = false
         // The screen went off (the phone is locking): see applyDarkMode.
         if (!getSystemService(android.os.PowerManager::class.java).isInteractive) {
             dimAfterUnlock = true

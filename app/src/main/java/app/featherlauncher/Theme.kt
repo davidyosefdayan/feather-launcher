@@ -34,6 +34,11 @@ class Palette(
     /** How light the wallpaper is overall. */
     wallLightness: Float = 0.3f,
 ) {
+    /** Everything it's made from: two made from the same are the same colors. */
+    private val madeFrom = listOf(hue, saturation, dark, wallpaperIsLight, wallHue, wallSaturation, wallLightness)
+
+    fun sameAs(other: Palette) = madeFrom == other.madeFrom
+
     /**
      * Surfaces on the wallpaper (app list, search, dock, tab bar, folders) follow Smart Launcher,
      * measured over many wallpapers: the wallpaper's hue at a fixed, gentle saturation and a
@@ -112,18 +117,44 @@ class Palette(
                 ThemeMode.SYSTEM -> context.resources.configuration.uiMode and
                     android.content.res.Configuration.UI_MODE_NIGHT_MASK == android.content.res.Configuration.UI_MODE_NIGHT_YES
             }
-            val colors = WallpaperManager.getInstance(context).getWallpaperColors(WallpaperManager.FLAG_SYSTEM)
-            val seed = colors?.let(::averageColor)?.let(::rgbToHsl)
-                ?: floatArrayOf(ColorStyle.OCEAN.hue, ColorStyle.OCEAN.saturation, 0.3f)
-            // Android's hint isn't always set (a pale pastel can come without it), so the
-            // wallpaper's own average brightness counts too.
-            val wallpaperIsLight = colors != null && (hints(colors) and HINT_SUPPORTS_DARK_TEXT != 0 || seed[2] > 0.7f)
-            android.util.Log.d("Palette", "wallpaper average -> hue ${seed[0]} sat ${seed[1]} light ${seed[2]}")
+            val (seed, wallpaperIsLight) = wallpaper(context)
             val custom = if (accentColor != 0) rgbToHsl(accentColor) else null
             val hue = custom?.get(0) ?: if (style == ColorStyle.WALLPAPER) seed[0] else style.hue
             val saturation = custom?.get(1)?.coerceAtLeast(0.35f) ?: if (style == ColorStyle.WALLPAPER) seed[1] else style.saturation
             return Palette(hue, saturation, dark, wallpaperIsLight, seed[0], seed[1], seed[2])
         }
+
+        /**
+         * The wallpaper's average color (hue, saturation, lightness) and whether it's light. Asked of
+         * Android once, then again only after it says the wallpaper changed: every screen and every
+         * return home wants it, and each time Android sends over all of the wallpaper's colors.
+         */
+        private fun wallpaper(context: Context): Pair<FloatArray, Boolean> {
+            known?.let { return it }
+            val manager = WallpaperManager.getInstance(context)
+            if (!watching) {
+                watching = true
+                manager.addOnColorsChangedListener({ _, which ->
+                    if (which and WallpaperManager.FLAG_SYSTEM != 0) {
+                        known = null
+                        wallpaperChanged.toList().forEach { it() }
+                    }
+                }, android.os.Handler(android.os.Looper.getMainLooper()))
+            }
+            val colors = manager.getWallpaperColors(WallpaperManager.FLAG_SYSTEM)
+            val seed = colors?.let(::averageColor)?.let(::rgbToHsl)
+                ?: floatArrayOf(ColorStyle.OCEAN.hue, ColorStyle.OCEAN.saturation, 0.3f)
+            // Android's hint isn't always set (a pale pastel can come without it), so the
+            // wallpaper's own average brightness counts too.
+            val wallpaperIsLight = colors != null && (hints(colors) and HINT_SUPPORTS_DARK_TEXT != 0 || seed[2] > 0.7f)
+            return (seed to wallpaperIsLight).also { known = it }
+        }
+
+        @Volatile private var known: Pair<FloatArray, Boolean>? = null
+        @Volatile private var watching = false
+
+        /** Run on the main thread when the wallpaper's colors change; [from] gives the new ones by then. */
+        val wallpaperChanged = mutableListOf<() -> Unit>()
 
         /** Same as WallpaperColors.HINT_SUPPORTS_DARK_TEXT, which Android 11 has but keeps private. */
         private const val HINT_SUPPORTS_DARK_TEXT = 1
@@ -150,7 +181,6 @@ class Palette(
             weighted.forEach { (c, w) ->
                 r += Color.red(c) * w; g += Color.green(c) * w; b += Color.blue(c) * w; total += w
             }
-            android.util.Log.d("Palette", "average from ${if (all != null) "${all.size} colors" else "main colors"}")
             return Color.rgb((r / total).toInt(), (g / total).toInt(), (b / total).toInt())
         }
 
