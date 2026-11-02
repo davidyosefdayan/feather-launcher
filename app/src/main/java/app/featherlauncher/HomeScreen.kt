@@ -468,7 +468,15 @@ class HomeScreen(
     /** Puts an app on the first free spot, starting at the visible page, adding a page if all are full. */
     fun addApp(entry: AppEntry) = addItem(1, 1, HomeItem.Type.APP, entry.key)
 
-    fun addWidget(appWidgetId: Int, spanX: Int, spanY: Int) = addItem(spanX, spanY, HomeItem.Type.WIDGET, appWidgetId.toString())
+    /** Another app's widget, where it was dropped ([at]) if that's still free, else the first place with room. */
+    fun addWidget(appWidgetId: Int, spanX: Int, spanY: Int, at: Triple<Int, Int, Int>?) {
+        if (at == null || at.first !in 0 until workspace.pageCount || !workspace.isFree(at.first, at.second, at.third, spanX, spanY))
+            return addItem(spanX, spanY, HomeItem.Type.WIDGET, appWidgetId.toString())
+        workspace.add(at.first, at.second, at.third, spanX, spanY, HomeItem.Type.WIDGET, appWidgetId.toString())
+        workspace.save()
+        bindAll()
+        pages.snapTo(at.first)
+    }
 
     /** The clock, or At a glance: the same lines without the time, in a shorter space. */
     fun addFeather(kind: FeatherKind) = addItem(kind.w, kind.height(cellSizeDp().second), HomeItem.Type.CLOCK, kind.ref)
@@ -911,6 +919,10 @@ class HomeScreen(
     /** Lets a widget held in the widget list be dragged onto a page; [preview] is how it looks there. */
     fun armWidget(kind: FeatherKind, preview: View) = drag.arm(DragSource(null, null, preview, kind = kind))
 
+    /** Lets another app's widget held in the widget list be dragged onto a page; it's added where it's dropped. */
+    fun armOtherWidget(info: android.appwidget.AppWidgetProviderInfo, preview: View, w: Int, h: Int) =
+        drag.arm(DragSource(null, null, preview, other = OtherWidget(info, w, h)))
+
     /** Lets a long-pressed app in the app list be dragged onto the home screen. */
     fun armFromDrawer(entry: AppEntry, row: View) = drag.arm(DragSource(null, entry, row))
 
@@ -930,7 +942,11 @@ class HomeScreen(
      */
     private class DragSource(val item: HomeItem?, val entry: AppEntry?, val view: View, val folder: HomeItem? = null, val kind: FeatherKind? = null,
         /** Where [view] was when it was picked up, for one that's gone by the time the drag starts (an app in a folder: its menu closes the folder). */
-        val from: Rect? = null)
+        val from: Rect? = null,
+        /** Another app's widget from the widget list, bound and set up once it's dropped. */
+        val other: OtherWidget? = null)
+
+    private class OtherWidget(val info: android.appwidget.AppWidgetProviderInfo, val w: Int, val h: Int)
 
     private inner class Drag {
         var downX = 0f
@@ -1088,14 +1104,14 @@ class HomeScreen(
             return active
         }
 
-        private val w get() = source?.item?.w ?: source?.kind?.w ?: 1
-        private val h get() = source?.item?.h ?: source?.kind?.height(cellSizeDp().second) ?: 1
+        private val w get() = source?.item?.w ?: source?.kind?.w ?: source?.other?.w ?: 1
+        private val h get() = source?.item?.h ?: source?.kind?.height(cellSizeDp().second) ?: source?.other?.h ?: 1
 
         private fun start(src: DragSource, ev: MotionEvent) {
             active = true
             // A widget's picture is taken from the widget list before it closes, and where an
             // app in a folder is before the folder closes: once it's closing, it's gone or moving.
-            val listShot = src.kind?.let { snapshot(src.view) to rectInRoot(src.view) }
+            val listShot = if (src.kind != null || src.other != null) snapshot(src.view) to rectInRoot(src.view) else null
             val inFolder = src.from ?: src.folder?.let { rectInRoot(src.view) }
             overlays.dismiss()
             finishResize()
@@ -1122,7 +1138,7 @@ class HomeScreen(
                 }
             }
             // Hold the icon where the finger first pressed it, so it stays under the finger.
-            val fromPress = src.item != null || src.folder != null || src.kind != null
+            val fromPress = src.item != null || src.folder != null || src.kind != null || src.other != null
             grabX = (if (fromPress) downX else ev.x) - origin.left
             grabY = (if (fromPress) downY else ev.y) - origin.top
             dragView = ImageView(activity).apply {
@@ -1310,7 +1326,7 @@ class HomeScreen(
          * meaning a drop would make or fill a folder. Folders can't go inside folders.
          */
         private fun folderCandidate(page: Int, col: Int, row: Int, view: View): HomeItem? {
-            if (source?.item?.type == HomeItem.Type.FOLDER) return null
+            if (source?.item?.type == HomeItem.Type.FOLDER || source?.kind != null || source?.other != null) return null
             val occupant = workspace.on(page).firstOrNull {
                 it.x == col && it.y == row && it !== source?.item && it !== source?.folder && it !in shifted.keys && it !== bumped?.first &&
                     (it.type == HomeItem.Type.APP || it.type == HomeItem.Type.FOLDER)
@@ -1562,7 +1578,7 @@ class HomeScreen(
             target = next
             next?.let {
                 val cells = containerFor(it.first)
-                cells.dropPreviewIsIcon = source?.item?.isWidget != true
+                cells.dropPreviewIsIcon = source?.item?.isWidget != true && source?.kind == null && source?.other == null
                 cells.dropPreviewBare = source?.item?.let { views[it.id]?.getTag(R.id.home_bare) } == true
                 cells.dropPreview = Rect(it.second, it.third, it.second + w, it.third + h)
             }
@@ -1605,6 +1621,15 @@ class HomeScreen(
                 return
             }
             clearReorder(commit = true)
+            // Another app's widget is only made once it's bound and set up; then it's placed here.
+            src.other?.let { other ->
+                setTarget(null)
+                workspace.save()
+                bindAll()
+                fadeOut()
+                widgets.add(other.info, t)
+                return
+            }
             val item = src.item
                 ?: src.kind?.let { workspace.add(t.first, t.second, t.third, it.w, h, HomeItem.Type.CLOCK, it.ref) }
                 ?: workspace.add(t.first, t.second, t.third, 1, 1, HomeItem.Type.APP, src.entry!!.key)
