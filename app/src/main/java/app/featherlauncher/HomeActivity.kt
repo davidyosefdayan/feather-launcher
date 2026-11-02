@@ -926,16 +926,16 @@ class HomeActivity : Activity(), HomeScreen.Host {
     /** A search result with its standing for what's typed (see [SearchHistory.Ranker]). */
     private class Hit<T>(val item: T, val id: String, val points: Double)
 
+    /** Whether something can search the web; asked once per return to the home screen, not per letter. */
+    private var webSearch: Boolean? = null
+    private fun canSearchWeb(web: Intent) = webSearch ?: (packageManager.resolveActivity(web, 0) != null).also { webSearch = it }
+
     /**
      * Smart Search: a number to call, contacts, apps, app shortcuts, phone settings and files, each
      * its own section with a few results and "Show more", and each can be turned off in Settings.
      * Each section puts what's most likely wanted first, and a result clearly ahead of all others
      * goes above them all as the Top match. Empty, it shows favorite contacts and frequent apps.
      */
-    /** Whether something can search the web; asked once per return to the home screen, not per letter. */
-    private var webSearch: Boolean? = null
-    private fun canSearchWeb(web: Intent) = webSearch ?: (packageManager.resolveActivity(web, 0) != null).also { webSearch = it }
-
     private fun updateSearch() {
         findViewById<View>(R.id.tabs_scroll).visibility = View.GONE
         chipsScroll.visibility = View.GONE
