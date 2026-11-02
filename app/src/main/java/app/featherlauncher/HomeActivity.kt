@@ -97,6 +97,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { onBack() }
 
         prefs = Prefs(this)
+        shownNight = resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
         palette = currentPalette()
         Workspace.fitRows(this)
         repo = Launcher.repo(this)
@@ -171,9 +172,17 @@ class HomeActivity : Activity(), HomeScreen.Host {
         super.onConfigurationChanged(newConfig)
         // Light/dark mode switched while the launcher was running.
         palette = currentPalette()
+        val night = newConfig.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+        if (night != shownNight) {
+            shownNight = night
+            homeScreen.remakeOtherWidgets()
+        }
         applyTheme()
         applyDarkMode()
     }
+
+    /** The phone's light or dark mode that other apps' widgets were last made in. */
+    private var shownNight = 0
 
     /** Icons, the wallpaper dimming and the wallpaper pair, for the current light or dark mode. */
     /** The screen went off; the darkening comes back after the unlock (see [applyDarkMode]). */

@@ -288,6 +288,17 @@ class HomeScreen(
     }
 
     /**
+     * Other apps' widgets are drawn once, in the light or dark mode the phone was in; they're made
+     * again ([applyTheme] then puts them back) so they take on the new one, as they would if the
+     * launcher had started in it.
+     */
+    fun remakeOtherWidgets() {
+        views.entries.filter { it.value is WidgetView }.map { it.key }.forEach { id ->
+            views.remove(id)?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        }
+    }
+
+    /**
      * Feather's widgets look again at what they show, coming home (a setting may have changed);
      * each changes only if something on it did. New ones do as they're added.
      */
