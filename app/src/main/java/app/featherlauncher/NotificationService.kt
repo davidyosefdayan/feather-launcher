@@ -100,9 +100,7 @@ class NotificationService : NotificationListenerService() {
     companion object {
         private const val PERMANENT_SNOOZE = 5 * 60 * 60 * 1000L
 
-        /** The service while it's connected, also to dismiss notifications that go when they're opened. */
-        @Volatile var running: NotificationService? = null
-            private set
+        private var running: NotificationService? = null
 
         /** Who has a notification showing right now (empty without notification access). */
         fun showingFrom(): List<String> = runCatching { running?.activeNotifications?.map { it.packageName } }.getOrNull().orEmpty()
@@ -112,6 +110,9 @@ class NotificationService : NotificationListenerService() {
             val service = running ?: return
             runCatching { service.activeNotifications }.getOrNull()?.forEach(service::filter)
         }
+
+        /** Clears the notification with [key], as swiping it away in the shade does. False when it can't. */
+        fun cancel(key: String): Boolean = running?.let { runCatching { it.cancelNotification(key) }.isSuccess } == true
 
         fun isEnabled(context: Context): Boolean {
             val me = ComponentName(context, NotificationService::class.java)

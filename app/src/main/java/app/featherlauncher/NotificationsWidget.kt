@@ -109,12 +109,11 @@ class Note(private val context: Context, val sbn: StatusBarNotification) {
         if (!sent) context.packageManager.getLaunchIntentForPackage(sbn.packageName)?.let {
             runCatching { context.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
         }
-        if (n.flags and Notification.FLAG_AUTO_CANCEL != 0) runCatching { NotificationService.running?.cancelNotification(key) }
+        if (n.flags and Notification.FLAG_AUTO_CANCEL != 0) NotificationService.cancel(key)
     }
 
     /** Clears it, as swiping it away in the shade does. Returns false when it can't be. */
-    fun clear(): Boolean = clearable &&
-        NotificationService.running?.let { runCatching { it.cancelNotification(key) }.isSuccess } == true
+    fun clear(): Boolean = clearable && NotificationService.cancel(key)
 
     /** Presses one of its buttons. A reply needs typing, which its app is for. */
     fun press(a: Notification.Action) {
