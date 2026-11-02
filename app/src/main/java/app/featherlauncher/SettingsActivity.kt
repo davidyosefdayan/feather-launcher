@@ -432,7 +432,7 @@ class SettingsActivity : Activity() {
     }
 
     private fun lookName(look: IconLookSetting) = when (look) {
-        IconLookSetting.AUTO -> "Automatic (dark in dark mode)"
+        IconLookSetting.AUTO -> "Automatic (dark with a dark theme)"
         IconLookSetting.LIGHT -> "Light"
         IconLookSetting.DARK -> "Dark"
         IconLookSetting.TINTED -> "Tinted"
@@ -444,7 +444,7 @@ class SettingsActivity : Activity() {
             ?: repo.apps.firstOrNull { it.packageName.startsWith("com.google") } ?: repo.apps.firstOrNull()
         val drawable = sample?.let { runCatching { packageManager.getApplicationIcon(it.packageName) }.getOrNull() } ?: return@apply
         val iconLook = when (look) {
-            IconLookSetting.AUTO -> if (DarkMode.isNight(this@SettingsActivity)) IconLook.DARK else IconLook.NORMAL
+            IconLookSetting.AUTO -> if (DarkMode.isDarkTheme(this@SettingsActivity, prefs)) IconLook.DARK else IconLook.NORMAL
             IconLookSetting.LIGHT -> IconLook.NORMAL
             IconLookSetting.DARK -> IconLook.DARK
             IconLookSetting.TINTED -> IconLook.TINTED
