@@ -24,6 +24,7 @@ import java.util.Date
  */
 enum class FeatherKind(val ref: String, val label: String, val w: Int, val h: Int, val about: String, val minW: Int = 2, val minH: Int = 1, val maxH: Int = Int.MAX_VALUE) {
     CLOCK("", "Clock", 4, 2, "The time, the date and what's coming up"),
+    ANALOG("analog", "Analog clock", 2, 2, "The time on a clock face", minH = 2),
     // One row only, as Google's At a Glance: taller, it's mostly empty card.
     UP_NEXT("upnext", "Up next", 4, 1, "Your next event, zman and alarm, with the weather now", maxH = 1),
     CALENDAR("agenda", "Calendar", 4, 2, "Your upcoming events", minH = 2),

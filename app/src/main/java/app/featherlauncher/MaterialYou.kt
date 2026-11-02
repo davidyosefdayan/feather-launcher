@@ -19,8 +19,9 @@ import kotlin.math.sin
 // The color ids are only used as names here; Android 11 never looks them up.
 @SuppressLint("InlinedApi")
 object MaterialYou {
-    private enum class Family(val chroma: (seed: Double) -> Double) {
-        ACCENT1({ maxOf(it, 48.0) }), ACCENT2({ 16.0 }), NEUTRAL1({ 4.0 }), NEUTRAL2({ 8.0 })
+    /** [hue] is turned from the wallpaper's, in degrees: the third accent sits 60° round, as on Android 12. */
+    private enum class Family(val chroma: (seed: Double) -> Double, val hue: Double = 0.0) {
+        ACCENT1({ maxOf(it, 48.0) }), ACCENT2({ 16.0 }), ACCENT3({ 32.0 }, 60.0), NEUTRAL1({ 4.0 }), NEUTRAL2({ 8.0 })
     }
 
     /** The colors Feather uses, by family and shade. */
@@ -33,6 +34,8 @@ object MaterialYou {
         android.R.color.system_accent1_800 to (Family.ACCENT1 to 800),
         android.R.color.system_accent1_900 to (Family.ACCENT1 to 900),
         android.R.color.system_accent2_50 to (Family.ACCENT2 to 50),
+        android.R.color.system_accent3_200 to (Family.ACCENT3 to 200),
+        android.R.color.system_accent3_600 to (Family.ACCENT3 to 600),
         android.R.color.system_accent2_800 to (Family.ACCENT2 to 800),
         android.R.color.system_neutral1_50 to (Family.NEUTRAL1 to 50),
         android.R.color.system_neutral1_900 to (Family.NEUTRAL1 to 900),
@@ -57,7 +60,7 @@ object MaterialYou {
         }
         return made.getOrPut(id) {
             val (_, c, h) = lch(seed)
-            fromLch(100.0 - shade / 10.0, family.chroma(c), h)
+            fromLch(100.0 - shade / 10.0, family.chroma(c), (h + family.hue) % 360.0)
         }
     }
 
