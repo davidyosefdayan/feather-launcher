@@ -436,7 +436,9 @@ class Widgets(
         /** The widget itself. */
         private fun sample(kind: FeatherKind): View {
             val item = HomeItem(PREVIEW_ID - kind.ordinal, 0, 0, 0, kind.w, kind.height(cellHeightDp), HomeItem.Type.CLOCK, kind.ref)
-            return CardWidget.create(activity, item) ?: ClockWidget(activity, item).apply { setSolid(true) }
+            return CardWidget.create(activity, item)
+                ?: if (kind == FeatherKind.ANALOG) AnalogClockWidget(activity, item).apply { setSolid(true) }
+                else ClockWidget(activity, item).apply { setSolid(true) }
         }
 
         private fun widgetCard(p: Palette): FrameLayout {

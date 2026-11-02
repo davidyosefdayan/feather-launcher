@@ -234,7 +234,7 @@ class HomeScreen(
         // New corners (names turned on or off, another icon shape): Feather's widgets are made
         // again with them, and other apps' are rounded again.
         if (applyCorners()) {
-            views.entries.filter { it.value is CardWidget || it.value is ClockWidget }.map { it.key }.forEach { id ->
+            views.entries.filter { it.value is CardWidget || it.value is ClockWidget || it.value is AnalogClockWidget }.map { it.key }.forEach { id ->
                 views.remove(id)?.let { (it.parent as? ViewGroup)?.removeView(it) }
             }
             views.values.filterIsInstance<WidgetView>().forEach { it.requestLayout() }
@@ -254,6 +254,7 @@ class HomeScreen(
         for (item in workspace.items) {
             val view = views[item.id] ?: createView(item)?.also { views[item.id] = it } ?: continue
             (view as? ClockWidget)?.refresh()
+            (view as? AnalogClockWidget)?.refresh()
             (view as? CardWidget)?.refresh()
             if (view is AppIconView) {
                 val showLabel = !item.inDock && prefs.showLabels
@@ -358,7 +359,12 @@ class HomeScreen(
                 }
             }
             setOnLongClickListener { onItemLongPress(item, it); true }
-        } ?: ClockWidget(activity, item).apply {
+        } ?: if (FeatherKind.of(item) == FeatherKind.ANALOG) AnalogClockWidget(activity, item).apply {
+            setSolid(prefs.widgetSolid(item.id))
+            foreground = Ui.focusHighlight(activity, WidgetStyle.radius + CardWidget.GAP)
+            setOnClickListener { host.startSafely(Intent(AlarmClock.ACTION_SHOW_ALARMS)) }
+            setOnLongClickListener { onItemLongPress(item, it); true }
+        } else ClockWidget(activity, item).apply {
             setSolid(prefs.widgetSolid(item.id))
             // The keypad highlight follows the card's corner, as it does around the other widgets.
             foreground = Ui.focusHighlight(activity, WidgetStyle.radius + CardWidget.GAP)
@@ -397,7 +403,8 @@ class HomeScreen(
      * it to name, and the widget takes its room.
      */
     private fun name(item: HomeItem, view: View) {
-        val bare = (view as? ClockWidget)?.solid == false || (view as? UpNextWidget)?.solid == false || (view as? WidgetView)?.bare == true
+        val bare = (view as? ClockWidget)?.solid == false || (view as? AnalogClockWidget)?.solid == false ||
+            (view as? UpNextWidget)?.solid == false || (view as? WidgetView)?.bare == true
         view.setTag(R.id.home_name, if (bare) null else widgetName(item))
         view.setTag(R.id.home_bare, bare)
         (view.parent as? View)?.apply { requestLayout(); invalidate() }
@@ -444,7 +451,7 @@ class HomeScreen(
         // Feather's widgets take the wallpaper's colors too, so they're made again in the new ones.
         WidgetStyle.palette = palette
         WidgetStyle.context = activity.applicationContext
-        views.entries.filter { it.value is CardWidget || it.value is ClockWidget }.map { it.key }.forEach { id ->
+        views.entries.filter { it.value is CardWidget || it.value is ClockWidget || it.value is AnalogClockWidget }.map { it.key }.forEach { id ->
             views.remove(id)?.let { (it.parent as? ViewGroup)?.removeView(it) }
         }
         bindAll()
@@ -500,8 +507,9 @@ class HomeScreen(
             alpha = 0f
             scaleX = 0.85f
             scaleY = 0.85f
+            // Its name is drawn by the page, so the page draws again as it fades in.
             animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(120).setDuration(260)
-                .setInterpolator(DecelerateInterpolator(2f)).start()
+                .setInterpolator(DecelerateInterpolator(2f)).setUpdateListener { (parent as? View)?.invalidate() }.start()
         }
     }
 
@@ -812,7 +820,7 @@ class HomeScreen(
         val open: () -> Unit = when (item.type) {
             HomeItem.Type.WIDGET -> if (widgets.canReconfigure(item.ref.toInt())) ({ widgets.reconfigure(item.ref.toInt()) }) else return null
             HomeItem.Type.CLOCK -> when (FeatherKind.of(item)) {
-                FeatherKind.CLOCK, FeatherKind.UP_NEXT -> ({ featherSettings(item) })
+                FeatherKind.CLOCK, FeatherKind.ANALOG, FeatherKind.UP_NEXT -> ({ featherSettings(item) })
                 else -> return null
             }
             else -> return null
@@ -834,6 +842,7 @@ class HomeScreen(
             column.addView(Components.segmented(activity, p, listOf("Solid", "Transparent"), if (solid) 0 else 1) {
                 prefs.setWidgetSolid(item.id, it == 0)
                 (views[item.id] as? ClockWidget)?.setSolid(it == 0)
+                (views[item.id] as? AnalogClockWidget)?.setSolid(it == 0)
                 (views[item.id] as? UpNextWidget)?.solid = it == 0
                 views[item.id]?.let { view -> name(item, view) }
                 build()
@@ -1881,7 +1890,7 @@ class HomeScreen(
             val b = bounds()
             // Around a card, its curve runs parallel to the card's, the frame's distance out.
             val radius = when (view) {
-                is CardWidget, is ClockWidget -> dp(WidgetStyle.radius + CardWidget.GAP - 2).toFloat()
+                is CardWidget, is ClockWidget, is AnalogClockWidget -> dp(WidgetStyle.radius + CardWidget.GAP - 2).toFloat()
                 is WidgetView -> (view.corner + view.cornerInset - dp(2)).coerceAtLeast(dp(18).toFloat())
                 else -> dp(18).toFloat()
             }
@@ -1985,7 +1994,7 @@ class HomeScreen(
         val bitmap = Bitmap.createBitmap(view.width.coerceAtLeast(1), view.height.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
         // Draw without the keypad highlight or press scale.
         // A Feather widget's background is its card; others' is just the keypad highlight.
-        if (view is CardWidget || view is ClockWidget) {
+        if (view is CardWidget || view is ClockWidget || view is AnalogClockWidget) {
             view.draw(Canvas(bitmap))
             return bitmap
         }

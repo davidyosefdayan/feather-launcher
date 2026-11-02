@@ -49,6 +49,9 @@ object WidgetStyle {
     /** The accent, for what matters most on a card. */
     fun accent() = system(android.R.color.system_accent1_200, android.R.color.system_accent1_600, 0xFFA8C7FA.toInt())
     /** A softer accent fill, and text on it. */
+    /** The third accent, a hue away from the first, for what should stand out from it (the analog clock's second hand). */
+    fun tertiary() = system(android.R.color.system_accent3_200, android.R.color.system_accent3_600, 0xFFEFB8C8.toInt())
+
     fun accentFill() = system(android.R.color.system_accent1_700, android.R.color.system_accent1_100, 0xFF0B57D0.toInt())
     fun onAccentFill() = system(android.R.color.system_accent1_100, android.R.color.system_accent1_900, WHITE)
     /** Text and icons on a solid [accent] fill. */

@@ -22,7 +22,7 @@ object WidgetSheet {
     fun draw(context: Context, done: (String) -> Unit) {
         val grid = CellLayout.grid ?: return done("Open the home screen first")
         val samples = FeatherKind.entries.flatMap { kind ->
-            if (kind == FeatherKind.CLOCK || kind == FeatherKind.UP_NEXT)
+            if (kind == FeatherKind.CLOCK || kind == FeatherKind.ANALOG || kind == FeatherKind.UP_NEXT)
                 listOf(Sample("${kind.name.lowercase()}-solid", kind, true), Sample("${kind.name.lowercase()}-transparent", kind, false))
             else listOf(Sample(kind.name.lowercase(), kind, true))
         }
@@ -31,9 +31,11 @@ object WidgetSheet {
             // Only the sizes it can be made.
             (s.kind.minH..minOf(s.kind.maxH, Workspace.ROWS)).flatMap { h -> (s.kind.minW..Workspace.COLS).map { w -> w to h } }.map { (w, h) ->
                 val item = HomeItem(id--, 0, 0, 0, w, h, HomeItem.Type.CLOCK, s.kind.ref)
-                val view = CardWidget.create(context, item) ?: ClockWidget(context, item)
+                val view = CardWidget.create(context, item)
+                    ?: if (s.kind == FeatherKind.ANALOG) AnalogClockWidget(context, item) else ClockWidget(context, item)
                 when (view) {
                     is ClockWidget -> view.setSolid(s.solid)
+                    is AnalogClockWidget -> view.setSolid(s.solid)
                     is UpNextWidget -> view.solid = s.solid
                 }
                 val (pw, ph) = grid.widgetSize(w, h)
@@ -52,6 +54,7 @@ object WidgetSheet {
             steps += { next ->
                 (v as? CardWidget)?.refresh()
                 (v as? ClockWidget)?.refresh()
+                (v as? AnalogClockWidget)?.refresh()
                 lay(v, v.width, v.height)
                 next()
             }
