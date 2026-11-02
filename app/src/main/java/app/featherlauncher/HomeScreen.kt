@@ -256,9 +256,6 @@ class HomeScreen(
         val now = System.currentTimeMillis()
         for (item in workspace.items) {
             val view = views[item.id] ?: createView(item)?.also { views[item.id] = it } ?: continue
-            (view as? ClockWidget)?.refresh()
-            (view as? AnalogClockWidget)?.refresh()
-            (view as? CardWidget)?.refresh()
             if (view is AppIconView) {
                 val showLabel = !item.inDock && prefs.showLabels
                 if (item.type == HomeItem.Type.FOLDER) {
@@ -288,6 +285,17 @@ class HomeScreen(
         }
         sizeDock()
         pages.updateFocusability()
+    }
+
+    /**
+     * Feather's widgets look again at what they show, coming home (a setting may have changed);
+     * each changes only if something on it did. New ones do as they're added.
+     */
+    fun refreshWidgets() {
+        for (view in views.values) {
+            (view as? ClockWidget)?.refresh()
+            (view as? CardWidget)?.refresh()
+        }
     }
 
     /** The home screen's icons, the same on pages and in the dock; bigger with no names under them, smaller on a narrow screen. */

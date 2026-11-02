@@ -73,6 +73,8 @@ class AnalogClockWidget(context: Context, val item: HomeItem) : FrameLayout(cont
         /** The face's shading, made again only when its size or color changes, not every second. */
         private var shading: RadialGradient? = null
         private var shadingFor = 0L
+        /** The minute [contentDescription] was last set for. */
+        private var described = -1L
 
         override fun onVisibilityAggregated(isVisible: Boolean) {
             super.onVisibilityAggregated(isVisible)
@@ -144,7 +146,12 @@ class AnalogClockWidget(context: Context, val item: HomeItem) : FrameLayout(cont
             paint.color = if (solid) WidgetStyle.accentFill() else hands
             canvas.drawCircle(cx, cy, r * 0.018f, paint)
 
-            contentDescription = android.text.format.DateFormat.getTimeFormat(context).format(calendar.time)
+            // Said once a minute, not worked out every second.
+            val minute = calendar.timeInMillis / 60_000L
+            if (minute != described) {
+                described = minute
+                contentDescription = android.text.format.DateFormat.getTimeFormat(context).format(calendar.time)
+            }
             // Ticks on the second while it's on screen.
             removeCallbacks(second)
             if (showing) postDelayed(second, 1000L - System.currentTimeMillis() % 1000L)

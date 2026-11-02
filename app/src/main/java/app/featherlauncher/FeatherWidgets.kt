@@ -53,8 +53,20 @@ abstract class CardWidget(context: Context, val item: HomeItem) : FrameLayout(co
     /** Rows that don't fit are left out, the last ones first. */
     protected val content = FitColumn(context).apply { gravity = Gravity.CENTER_VERTICAL }
 
-    private val tick = object : android.content.BroadcastReceiver() {
-        override fun onReceive(c: Context, intent: android.content.Intent) = refresh()
+    private val tick = MinuteTick(this) { refresh() }
+
+    /** What the card was last built to show, so a refresh that would show the same changes nothing ([same]). */
+    private var shown: Any? = null
+
+    /**
+     * Whether the card already shows what [key] describes (everything it's built from); if not,
+     * it's remembered as what's shown now. Building a card is far more work than finding out
+     * what's on it, and most minutes nothing on it changes.
+     */
+    protected fun same(key: Any): Boolean {
+        if (key == shown) return true
+        shown = key
+        return false
     }
 
     /** The padding inside the card. */
@@ -123,19 +135,28 @@ abstract class CardWidget(context: Context, val item: HomeItem) : FrameLayout(co
 
     override fun performLongClick() = hold.longClick { super.performLongClick() }
 
+    /** Whether what's on it changes with the time; Now playing changes with what's playing instead. */
+    protected open val everyMinute = true
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        context.registerReceiver(tick, android.content.IntentFilter().apply {
-            addAction(android.content.Intent.ACTION_TIME_TICK)
-            addAction(android.content.Intent.ACTION_TIME_CHANGED)
-            addAction(android.content.Intent.ACTION_TIMEZONE_CHANGED)
-        })
+        if (everyMinute) tick.attach()
         refresh()
     }
 
     override fun onDetachedFromWindow() {
-        runCatching { context.unregisterReceiver(tick) }
+        if (everyMinute) tick.detach()
         super.onDetachedFromWindow()
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        tick.shown()
+    }
+
+    override fun onVisibilityAggregated(isVisible: Boolean) {
+        super.onVisibilityAggregated(isVisible)
+        if (isVisible) tick.shown()
     }
 
     abstract fun refresh()
@@ -158,11 +179,12 @@ abstract class CardWidget(context: Context, val item: HomeItem) : FrameLayout(co
      * one line saying what it needs. Tapping anywhere on it does [onTap].
      */
     protected fun prompt(icon: Int, title: String, line: String, onTap: () -> Unit) {
+        setOnClickListener { onTap() }
+        if (same(listOf("prompt", icon, title, line))) return
         content.removeAllViews()
         content.gravity = Gravity.CENTER_VERTICAL
         content.spread = false
         setCard(WidgetStyle.cardBackground(context))
-        setOnClickListener { onTap() }
         content.addView(LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -269,11 +291,6 @@ class UpNextWidget(context: Context, item: HomeItem) : CardWidget(context, item)
     }
 
     override fun refresh() {
-        content.removeAllViews()
-        content.gravity = Gravity.CENTER_VERTICAL
-        if (solid) setCard(WidgetStyle.cardBackground(context)) else clearCard()
-        val main = if (solid) WidgetStyle.onCard() else WidgetStyle.WHITE
-        val quiet = if (solid) WidgetStyle.onCardQuiet() else WidgetStyle.SOFT_WHITE
         val now = System.currentTimeMillis()
         val lines = glance.lines(now) { if (isAttachedToWindow) refresh() }
         val coming = lines.coming
@@ -292,6 +309,15 @@ class UpNextWidget(context: Context, item: HomeItem) : CardWidget(context, item)
                 lines.place == null -> onLocation?.invoke()
             }
         }
+        val next = coming.getOrNull(1)
+        val w = lines.weather?.takeIf { roomy }
+        if (same(listOf(solid, roomy, icon, title, detail, first?.event?.location, next?.icon, next?.text,
+                w?.let { listOf(it.sky, it.night, it.temperature, it.hours.take(RAIN_HOURS).map { h -> h.rain }) }))) return
+        content.removeAllViews()
+        content.gravity = Gravity.CENTER_VERTICAL
+        if (solid) setCard(WidgetStyle.cardBackground(context)) else clearCard()
+        val main = if (solid) WidgetStyle.onCard() else WidgetStyle.WHITE
+        val quiet = if (solid) WidgetStyle.onCardQuiet() else WidgetStyle.SOFT_WHITE
 
         content.addView(LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -312,7 +338,6 @@ class UpNextWidget(context: Context, item: HomeItem) : CardWidget(context, item)
                     addView(fitText(main, 15f).apply { options = detail })
                 }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
                 // Where the event is, otherwise what comes after, when there's room.
-                val next = coming.getOrNull(1)
                 val (thirdIcon, third) = when {
                     first?.event?.location != null -> R.drawable.ic_location to listOf(first.event.location)
                     next != null -> next.icon to listOf("Then ${next.text}", next.text)
@@ -328,7 +353,7 @@ class UpNextWidget(context: Context, item: HomeItem) : CardWidget(context, item)
                     addView(fitText(quiet, 15f).apply { options = third })
                 }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4) })
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(12) })
-            lines.weather?.takeIf { roomy }?.let { w ->
+            w?.let { w ->
                 // The weather now: its picture over the temperature, on a square tile in the accent
                 // color, as tall as the card's room. Its corners run parallel to the card's, the
                 // padding in from them. When rain or snow is likely in the next few hours, its
@@ -435,14 +460,23 @@ class CalendarWidget(context: Context, item: HomeItem) : CardWidget(context, ite
                 allow(Setup.items.first { it.title == "Calendar" })
             }
         }
-        content.removeAllViews()
-        content.gravity = Gravity.CENTER_VERTICAL
         setOnClickListener { onCalendar?.invoke() }
         val now = System.currentTimeMillis()
         val info = ClockInfo(context)
         val place = info.place()
         val sunset = place?.let { Zmanim.sun(now, it, Zmanim.SUNRISE, false) }
         val second = Prefs(context).let { it.secondCalendar.format(now, sunset, it.hebrewInHebrew) }
+        val midnight = Calendar.getInstance().apply {
+            timeInMillis = now
+            add(Calendar.DAY_OF_YEAR, 1)
+            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val today = info.events(now, midnight, 20)
+        // The days after, each under its name, as far as two weeks ahead.
+        val later = info.events(midnight, midnight + 14 * DAY, 40).filter { it.begin >= midnight || it.allDay }
+        if (same(listOf(narrow, midnight, second, android.text.format.DateFormat.is24HourFormat(context), (today + later).map { listOf(it.id, it.title, it.begin, it.end, it.allDay, it.color) }, today.size))) return
+        content.removeAllViews()
+        content.gravity = Gravity.CENTER_VERTICAL
 
         val events = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -506,15 +540,7 @@ class CalendarWidget(context: Context, item: HomeItem) : CardWidget(context, ite
             addView(scroll, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
 
-        val midnight = Calendar.getInstance().apply {
-            timeInMillis = now
-            add(Calendar.DAY_OF_YEAR, 1)
-            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-        }.timeInMillis
-        val today = info.events(now, midnight, 20)
         today.forEachIndexed { i, e -> events.addView(gapAbove(event(e), if (i == 0) 0 else 10)) }
-        // The days after, each under its name, as far as two weeks ahead.
-        val later = info.events(midnight, midnight + 14 * DAY, 40).filter { it.begin >= midnight || it.allDay }
         if (later.isEmpty() && today.isEmpty()) {
             events.addView(quiet("No events in the next two weeks"))
             return
@@ -587,12 +613,19 @@ class WeatherWidget(context: Context, item: HomeItem) : CardWidget(context, item
     }
 
     override fun refresh() {
-        content.removeAllViews()
-        content.spread = false
         val place = ClockInfo(context).place { if (isAttachedToWindow) refresh() }
-        if (place == null) return prompt(R.drawable.ic_location, "Weather", "Set your location to see the weather", ::chooseLocation)
+        if (place == null) {
+            content.spread = false
+            return prompt(R.drawable.ic_location, "Weather", "Set your location to see the weather", ::chooseLocation)
+        }
         setOnClickListener(null)
         val w = Weather.at(place) { if (isAttachedToWindow) refresh() }
+        // The same forecast in the same size shows the same; only the day names and the hours' labels
+        // could still change, with the date and the clock's format.
+        if (same(listOf(compact, narrow, place.name, w ?: "loading", android.text.format.DateFormat.is24HourFormat(context),
+                JewishCalendar.day(System.currentTimeMillis(), java.util.TimeZone.getDefault())))) return
+        content.removeAllViews()
+        content.spread = false
         if (w == null) return loading(place.name)
         setCard(WeatherArt.sky(w.sky, w.night, dp(WidgetStyle.radius).toFloat()))
         // Room left over goes between the rows, not above and below them.
@@ -866,6 +899,8 @@ class MediaWidget(context: Context, item: HomeItem) : CardWidget(context, item) 
     /** Narrow: a small picture, the title on up to two lines, and only play and pause. */
     private var narrow = false
 
+    override val everyMinute = false
+
     override fun sizeChanged(w: Int, h: Int): Boolean {
         val next = w < dp(260)
         if (next == narrow) return false
@@ -891,10 +926,11 @@ class MediaWidget(context: Context, item: HomeItem) : CardWidget(context, item) 
     }
 
     override fun refresh() {
-        content.removeAllViews()
-        content.gravity = Gravity.CENTER_VERTICAL
-        if (!NotificationService.isEnabled(context)) return prompt(R.drawable.ic_media_music, "Now playing",
-            "Allow notification access to control what's playing") { allow(Setup.NOTIFICATIONS) }
+        if (!NotificationService.isEnabled(context)) {
+            content.gravity = Gravity.CENTER_VERTICAL
+            return prompt(R.drawable.ic_media_music, "Now playing",
+                "Allow notification access to control what's playing") { allow(Setup.NOTIFICATIONS) }
+        }
         setOnClickListener(null)
         // The one playing, else the last one that was.
         val all = runCatching { sessions.getActiveSessions(listener) }.getOrDefault(emptyList())
@@ -910,6 +946,13 @@ class MediaWidget(context: Context, item: HomeItem) : CardWidget(context, item) 
             it.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART) ?: it.getBitmap(MediaMetadata.METADATA_KEY_ART)
                 ?: it.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
         }
+        // Players report often (where they are in the song); most reports change nothing shown.
+        // The artwork comes as a new bitmap each time, so its size and middle pixel stand in for it.
+        if (same(listOf(narrow, c?.sessionToken, playing, meta?.getString(MediaMetadata.METADATA_KEY_TITLE),
+                meta?.getString(MediaMetadata.METADATA_KEY_ARTIST), meta?.getString(MediaMetadata.METADATA_KEY_ALBUM),
+                art?.let { listOf(it.width, it.height, runCatching { it.getPixel(it.width / 2, it.height / 2) }.getOrNull()) }))) return
+        content.removeAllViews()
+        content.gravity = Gravity.CENTER_VERTICAL
         // With artwork, the card is a deep shade of its color, with white type; without, the usual card.
         val tint = art?.let(::shadeOf)
         setCard(if (tint != null) Ui.rounded(context, tint, WidgetStyle.radius) else WidgetStyle.cardBackground(context))
@@ -1020,20 +1063,26 @@ class ZmanimWidget(context: Context, item: HomeItem) : CardWidget(context, item)
     }
 
     override fun refresh() {
-        content.removeAllViews()
-        content.gravity = Gravity.TOP
         val info = ClockInfo(context)
         val place = info.place { if (isAttachedToWindow) refresh() }
         val zmanim = Prefs(context).dailyZmanim
-        if (place == null) return prompt(R.drawable.ic_sunrise, if (zmanim) "Zmanim" else "Sunrise and sunset",
-            if (zmanim) "Set your location to see today's zmanim" else "Set your location to see today's times", ::chooseLocation)
-        setCard(WidgetStyle.cardBackground(context))
-        content.addView(heading(R.drawable.ic_sunrise, if (zmanim) "Zmanim" else "Sunrise and sunset", place.name))
+        if (place == null) {
+            content.gravity = Gravity.TOP
+            return prompt(R.drawable.ic_sunrise, if (zmanim) "Zmanim" else "Sunrise and sunset",
+                if (zmanim) "Set your location to see today's zmanim" else "Set your location to see today's times", ::chooseLocation)
+        }
         setOnClickListener { onOpen?.invoke(place) }
         val now = System.currentTimeMillis()
         val today = info.zmanim(now, place).filter { it.time > now }
         val coming = (today + info.zmanim(now + 86_400_000L, place)).take(12)
-        coming.forEachIndexed { i, z ->
+        val names = coming.map { info.zmanName(it) }
+        val times = coming.map { time(it.time, place.zone) }
+        if (same(listOf(narrow, zmanim, place.name, today.size, names, times))) return
+        content.removeAllViews()
+        content.gravity = Gravity.TOP
+        setCard(WidgetStyle.cardBackground(context))
+        content.addView(heading(R.drawable.ic_sunrise, if (zmanim) "Zmanim" else "Sunrise and sunset", place.name))
+        coming.indices.forEach { i ->
             val next = i == 0
             // Where the list goes on into tomorrow, it says so.
             if (i == today.size) content.addView(gapAbove(WidgetStyle.cardText(context, 12f, WidgetStyle.title, WidgetStyle.accent()).apply {
@@ -1054,10 +1103,10 @@ class ZmanimWidget(context: Context, item: HomeItem) : CardWidget(context, item)
                 }
                 val sp = if (narrow) 14f else 15f
                 val color = if (next) WidgetStyle.onAccentFill() else WidgetStyle.onCard()
-                addView(WidgetStyle.cardText(context, sp, if (next) WidgetStyle.title else WidgetStyle.body, color).apply { text = info.zmanName(z) },
+                addView(WidgetStyle.cardText(context, sp, if (next) WidgetStyle.title else WidgetStyle.body, color).apply { text = names[i] },
                     LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(if (narrow) 8 else 12) })
                 addView(WidgetStyle.cardText(context, sp, if (next) WidgetStyle.title else WidgetStyle.body,
-                    if (next) color else WidgetStyle.onCardQuiet()).apply { text = time(z.time, place.zone) })
+                    if (next) color else WidgetStyle.onCardQuiet()).apply { text = times[i] })
             }, if (next) 10 else 4))
         }
     }
@@ -1110,5 +1159,40 @@ class WholeHold(private val view: android.view.ViewGroup) {
         held = view.isInTouchMode
         view.removeCallbacks(hold)
         return superLongClick()
+    }
+}
+
+/**
+ * Runs [refresh] every minute, and when the time or time zone is changed, for a widget [view]
+ * that's on screen. While it isn't (another app is open, the screen is off), the minutes go by
+ * without it; it catches up once, as soon as it shows again. [view] calls [attach] and [detach]
+ * as it's attached and detached, and [shown] when its window or itself becomes visible.
+ */
+class MinuteTick(private val view: View, private val refresh: () -> Unit) {
+    private var missed = false
+    private val visible get() = view.isShown && view.windowVisibility == View.VISIBLE
+    private val receiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: Context, intent: android.content.Intent) {
+            if (visible) refresh() else missed = true
+        }
+    }
+
+    fun attach() {
+        missed = false
+        view.context.registerReceiver(receiver, android.content.IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_TIME_TICK)
+            addAction(android.content.Intent.ACTION_TIME_CHANGED)
+            addAction(android.content.Intent.ACTION_TIMEZONE_CHANGED)
+        })
+    }
+
+    fun detach() {
+        runCatching { view.context.unregisterReceiver(receiver) }
+    }
+
+    fun shown() {
+        if (!missed || !visible) return
+        missed = false
+        refresh()
     }
 }

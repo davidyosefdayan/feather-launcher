@@ -45,10 +45,15 @@ class ClockInfo(private val context: Context) {
      */
     fun place(named: (() -> Unit)? = null): Place? {
         prefs.chosenPlace?.let { return it }
-        if (context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+        // Asked once a minute at most: every widget wants it on every refresh.
+        val now = System.currentTimeMillis()
+        if (now - lookedAt !in 0 until LOOK_AGAIN &&
+            context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            lookedAt = now
             val lm = context.getSystemService(LocationManager::class.java)
             val fix = lm.getProviders(true).mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }.maxByOrNull { it.time }
-            if (fix != null) prefs.lastPlace = fix.latitude to fix.longitude
+            val at = fix?.let { it.latitude.toFloat().toDouble() to it.longitude.toFloat().toDouble() }
+            if (at != null && at != prefs.lastPlace) prefs.lastPlace = at
         }
         val (lat, lon) = prefs.lastPlace ?: return null
         // A name looked up a little way off still stands while the new one is found.
@@ -120,44 +125,51 @@ class ClockInfo(private val context: Context) {
     /** Events from [from] to [to], soonest first, all-day ones included; empty without calendar access. */
     fun events(from: Long, to: Long, limit: Int): List<Event> {
         if (context.checkSelfPermission(Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED) return emptyList()
-        val uri = CalendarContract.Instances.CONTENT_URI.buildUpon().also {
-            ContentUris.appendId(it, from)
-            ContentUris.appendId(it, to)
-        }.build()
-        return runCatching {
-            context.contentResolver.query(uri,
-                arrayOf(CalendarContract.Instances.EVENT_ID, CalendarContract.Instances.TITLE, CalendarContract.Instances.BEGIN,
-                    CalendarContract.Instances.END, CalendarContract.Instances.ALL_DAY, CalendarContract.Instances.DISPLAY_COLOR),
-                "${CalendarContract.Instances.END} > ? AND ${CalendarContract.Instances.VISIBLE} = 1",
-                arrayOf(from.toString()), "${CalendarContract.Instances.ALL_DAY} DESC, ${CalendarContract.Instances.BEGIN} ASC",
-            )?.use { c ->
-                val list = ArrayList<Event>()
-                while (c.moveToNext() && list.size < limit) {
-                    list += Event(c.getLong(0), c.getString(1).orEmpty().ifEmpty { "Event" }, c.getLong(2), c.getInt(4) == 1, c.getLong(3), c.getInt(5))
-                }
-                list
-            }.orEmpty()
-        }.getOrDefault(emptyList())
+        // As the calendar would answer: the ones that overlap the span, all-day ones first.
+        return instances(from, to).filter { it.end > from && it.begin <= to }
+            .sortedWith(compareByDescending<Event> { it.allDay }.thenBy { it.begin })
+            .take(limit)
+            .map { Event(it.id, it.title, it.begin, it.allDay, it.end, it.color) }
     }
 
     /** The next timed event in the coming day, if calendar access was given. */
     fun nextEvent(now: Long): Event? {
         if (context.checkSelfPermission(Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED) return null
+        return instances(now, now + DAY).filter { !it.allDay && it.begin >= now && it.begin <= now + DAY }.minByOrNull { it.begin }
+            ?.let { Event(it.id, it.title, it.begin, end = it.end, location = it.location) }
+    }
+
+    /**
+     * Every event from today to a little over two weeks ahead, read from the calendar once and
+     * kept until it changes (or [from] to [to] goes past what was read), instead of asking the
+     * calendar again for every widget every minute.
+     */
+    private fun instances(from: Long, to: Long): List<Event> {
+        watchCalendar(context.applicationContext)
+        kept?.let { (start, end, list) -> if (from >= start && to <= end) return list }
+        val start = from - DAY
+        val end = from + KEPT_DAYS * DAY
         val uri = CalendarContract.Instances.CONTENT_URI.buildUpon().also {
-            ContentUris.appendId(it, now)
-            ContentUris.appendId(it, now + DAY)
+            ContentUris.appendId(it, start)
+            ContentUris.appendId(it, end)
         }.build()
-        return runCatching {
+        val list = runCatching {
             context.contentResolver.query(uri,
                 arrayOf(CalendarContract.Instances.EVENT_ID, CalendarContract.Instances.TITLE, CalendarContract.Instances.BEGIN,
-                    CalendarContract.Instances.END, CalendarContract.Instances.EVENT_LOCATION),
-                "${CalendarContract.Instances.ALL_DAY} = 0 AND ${CalendarContract.Instances.BEGIN} >= ? AND ${CalendarContract.Instances.VISIBLE} = 1",
-                arrayOf(now.toString()), "${CalendarContract.Instances.BEGIN} ASC",
+                    CalendarContract.Instances.END, CalendarContract.Instances.ALL_DAY, CalendarContract.Instances.DISPLAY_COLOR,
+                    CalendarContract.Instances.EVENT_LOCATION),
+                "${CalendarContract.Instances.VISIBLE} = 1", null, "${CalendarContract.Instances.BEGIN} ASC",
             )?.use { c ->
-                if (c.moveToFirst()) Event(c.getLong(0), c.getString(1).orEmpty().ifEmpty { "Event" }, c.getLong(2), end = c.getLong(3),
-                    location = c.getString(4)?.trim()?.ifEmpty { null }) else null
+                val list = ArrayList<Event>()
+                while (c.moveToNext()) {
+                    list += Event(c.getLong(0), c.getString(1).orEmpty().ifEmpty { "Event" }, c.getLong(2), c.getInt(4) == 1, c.getLong(3), c.getInt(5),
+                        c.getString(6)?.trim()?.ifEmpty { null })
+                }
+                list
             }
-        }.getOrNull()
+        }.getOrNull() ?: return emptyList()
+        kept = Triple(start, end, list)
+        return list
     }
 
     companion object {
@@ -169,6 +181,34 @@ class ClockInfo(private val context: Context) {
 
         @Volatile private var looking = false
         @Volatile private var failedAt = 0L
+
+        /** When the phone's position was last asked for; [place] asks again after [LOOK_AGAIN]. */
+        @Volatile private var lookedAt = 0L
+        private const val LOOK_AGAIN = 60_000L
+
+        /** The events read last (see [instances]): from, to, and what's in between. */
+        @Volatile private var kept: Triple<Long, Long, List<Event>>? = null
+        private const val KEPT_DAYS = 16
+        private var watching = false
+
+        /** Anything changed in the calendar (an event added, a sync) is read again next time. */
+        private fun watchCalendar(context: Context) {
+            if (watching) return
+            watching = true
+            runCatching {
+                context.contentResolver.registerContentObserver(CalendarContract.CONTENT_URI, true,
+                    object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+                        override fun onChange(selfChange: Boolean) { kept = null }
+                    })
+            }
+            // A new time zone moves every event's time.
+            context.registerReceiver(object : android.content.BroadcastReceiver() {
+                override fun onReceive(c: Context, intent: android.content.Intent) { kept = null }
+            }, android.content.IntentFilter().apply {
+                addAction(android.content.Intent.ACTION_TIMEZONE_CHANGED)
+                addAction(android.content.Intent.ACTION_TIME_CHANGED)
+            })
+        }
 
         /**
          * Places matching [query]: Jewish communities first (from [COMMUNITIES], so they're found
