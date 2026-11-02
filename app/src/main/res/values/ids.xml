@@ -16,4 +16,6 @@
     <item name="drawer_palette" type="id" />
     <!-- On a contact's picture: the picture it's waiting for, read in the background. -->
     <item name="drawer_photo" type="id" />
+    <!-- On a wallpaper tile: the photo it shows, read once it's near the screen. -->
+    <item name="wallpaper_thumb" type="id" />
 </resources>
