@@ -315,10 +315,12 @@ class Overlays(private val root: FrameLayout, private val palette: () -> Palette
 
     /** A sheet with one text field and a Save button (or [action]), for naming things or searching. */
     /** Like [showInput], but saving an empty field is allowed (it clears the value). */
-    fun showInputAllowingEmpty(title: String, value: String, hint: String, onSave: (String) -> Unit) =
-        showInput(title, value, hint, allowEmpty = true, onSave = onSave)
+    /** With [saveOnClose], what's typed is kept however the sheet closes, not only with the button. */
+    fun showInputAllowingEmpty(title: String, value: String, hint: String, saveOnClose: Boolean = false, onSave: (String) -> Unit) =
+        showInput(title, value, hint, allowEmpty = true, saveOnClose = saveOnClose, onSave = onSave)
 
-    fun showInput(title: String, value: String, hint: String, allowEmpty: Boolean = false, action: String = "Save", onSave: (String) -> Unit) {
+    fun showInput(title: String, value: String, hint: String, allowEmpty: Boolean = false, action: String = "Save",
+                  saveOnClose: Boolean = false, onSave: (String) -> Unit) {
         val p = palette()
         val ctx = root.context
         val field = android.widget.EditText(ctx).apply {
@@ -333,9 +335,11 @@ class Overlays(private val root: FrameLayout, private val palette: () -> Palette
             background = Ui.rounded(ctx, p.surfaceHigh, Ui.RADIUS_M)
             setPadding(dp(Ui.SPACE_L), 0, dp(Ui.SPACE_L), 0)
         }
+        var saved = false
         fun save() {
             val text = field.text.toString().trim()
             if (text.isEmpty() && !allowEmpty) return
+            saved = true
             dismiss()
             onSave(text)
         }
@@ -352,7 +356,14 @@ class Overlays(private val root: FrameLayout, private val palette: () -> Palette
                 topMargin = dp(Ui.SPACE_M)
             })
         }
-        showSheet(title, column)
+        showSheet(title, column, onClosed = if (saveOnClose) ({
+            // Closed another way: what's there now counts. Posted, as saving rebuilds the page.
+            if (!saved) {
+                saved = true
+                val text = field.text.toString().trim()
+                if (text != value.trim()) root.post { onSave(text) }
+            }
+        }) else null)
         field.requestFocus()
         field.post {
             ctx.getSystemService(android.view.inputmethod.InputMethodManager::class.java)

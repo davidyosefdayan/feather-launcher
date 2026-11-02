@@ -43,6 +43,8 @@ class SettingsActivity : Activity() {
     /** The notification filter open in its editor, and whether it's a new one. */
     internal var filterDraft: NotificationFilter? = null
     internal var filterIsNew = false
+    /** The filter as it was when its editor opened, to tell whether leaving would lose changes. */
+    internal var filterOriginal: NotificationFilter? = null
 
     /** The app limit open on its page. */
     internal var limitId: Long? = null
@@ -259,7 +261,17 @@ class SettingsActivity : Activity() {
                     "Discard", "Keep editing", leave)
                 else leave()
             }
-            Page.FILTER, Page.NOTIFICATION_HISTORY -> {
+            Page.FILTER -> {
+                val leave = {
+                    filterDraft = null
+                    open(Page.NOTIFICATIONS)
+                }
+                if (filterDraft != null && filterDraft != filterOriginal) {
+                    confirm("Discard changes?", if (filterIsNew) "This filter won't be added." else "Your changes to this filter won't be saved.",
+                        "Discard", "Keep editing", leave)
+                } else leave()
+            }
+            Page.NOTIFICATION_HISTORY -> {
                 filterDraft = null
                 open(Page.NOTIFICATIONS)
             }

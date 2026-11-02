@@ -13,15 +13,26 @@ import android.service.notification.StatusBarNotification
  */
 class NotificationService : NotificationListenerService() {
     private var media: MediaGuard? = null
-
-    override fun onListenerConnected() {
-        media = MediaGuard(this).also { it.start() }
-        // Ones already showing when access was given (or the service restarted) are filtered too.
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    private val refilterNow = Runnable {
         runCatching { activeNotifications }.getOrNull()?.forEach(::filter)
         recount()
     }
 
+    override fun onListenerConnected() {
+        running = this
+        media = MediaGuard(this).also { it.start() }
+        // Ones already showing when access was given (or the service restarted) are filtered too.
+        // Just after the phone starts, apps are still putting theirs up (some before this
+        // connects, unseen), so it looks again a few times.
+        runCatching { activeNotifications }.getOrNull()?.forEach(::filter)
+        recount()
+        listOf(5_000L, 30_000L, 120_000L).forEach { main.postDelayed(refilterNow, it) }
+    }
+
     override fun onListenerDisconnected() {
+        running = null
+        main.removeCallbacks(refilterNow)
         media?.stop()
         media = null
         NotificationBadges.clear()
@@ -83,6 +94,17 @@ class NotificationService : NotificationListenerService() {
 
     companion object {
         private const val PERMANENT_SNOOZE = 5 * 60 * 60 * 1000L
+
+        private var running: NotificationService? = null
+
+        /** Who has a notification showing right now (empty without notification access). */
+        fun showingFrom(): List<String> = runCatching { running?.activeNotifications?.map { it.packageName } }.getOrNull().orEmpty()
+
+        /** Filters again what's showing, after a filter is added or changed. */
+        fun refilter() {
+            val service = running ?: return
+            runCatching { service.activeNotifications }.getOrNull()?.forEach(service::filter)
+        }
 
         fun isEnabled(context: Context): Boolean {
             val me = ComponentName(context, NotificationService::class.java)
