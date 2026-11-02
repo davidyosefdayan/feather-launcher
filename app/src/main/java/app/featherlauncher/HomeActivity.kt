@@ -881,6 +881,10 @@ class HomeActivity : Activity(), HomeScreen.Host {
         adapter.set(rows, null)
     }
 
+    /** What the tabs and chips were last made for ([renderTabs], [renderChips]). */
+    private var tabsShown: Any? = null
+    private var chipsShown: Any? = null
+
     /** In the All apps view, the category picked from the chips; null shows every app. */
     private var chipCategory: String? = null
     private val chipsScroll by lazy {
@@ -898,8 +902,12 @@ class HomeActivity : Activity(), HomeScreen.Host {
     /** "All" and then every category, as pills; the chosen one is filled. */
     private fun renderChips(shown: List<Categories.Item>) {
         val chips = findViewById<LinearLayout>(R.id.chips)
-        chips.removeAllViews()
         val options = listOf<Categories.Item?>(null) + shown
+        // The same chips are left as they are.
+        val key = listOf(shown.map { listOf(it.id, it.name, it.iconRes, it.filledIconRes) }, chipCategory, palette)
+        if (key == chipsShown && chips.childCount == options.size) return
+        chipsShown = key
+        chips.removeAllViews()
         options.forEach { c ->
             val selected = c?.id == chipCategory
             val fg = if (selected) palette.drawer or 0xFF000000.toInt() else palette.onWall
@@ -1109,13 +1117,21 @@ class HomeActivity : Activity(), HomeScreen.Host {
     /** The category icons along the bottom; long-press one to edit it. */
     private fun renderTabs(shown: List<Categories.Item>) {
         val tabs = findViewById<LinearLayout>(R.id.tabs)
+        // Categories holding an app that's new and not opened yet get a dot, like the app itself.
+        val withNew = repo.apps.filter { newApps.isNew(it) && it.key !in prefs.hidden }.map { categories.of(it) }.toSet()
+        // Opening the app list asks every time; the same tabs are left as they are (a tab let go
+        // of where it was picked up goes back into line).
+        val key = listOf(shown.map { listOf(it.id, it.name, it.iconRes, it.filledIconRes) }, category, showingHidden, withNew, palette)
+        if (key == tabsShown && tabs.childCount == shown.size) {
+            for (i in 0 until tabs.childCount) tabs.getChildAt(i).translationX = 0f
+            return
+        }
+        tabsShown = key
         // Same proportions as the dock: its corner is the same share of its height.
         tabs.background = Ui.rounded(this, palette.glass, Ui.RADIUS_BAR * TAB_BAR_HEIGHT / Ui.DOCK_HEIGHT, palette.hairline)
         tabs.removeAllViews()
         // Tabs share the bar's width; with more than fit, they keep a minimum size and the bar scrolls.
         val fits = shown.size <= MAX_FITTING_TABS
-        // Categories holding an app that's new and not opened yet get a dot, like the app itself.
-        val withNew = repo.apps.filter { newApps.isNew(it) && it.key !in prefs.hidden }.map { categories.of(it) }.toSet()
         shown.forEach { c ->
             val selected = c.id == category && !showingHidden
             tabs.addView(FrameLayout(this).apply {

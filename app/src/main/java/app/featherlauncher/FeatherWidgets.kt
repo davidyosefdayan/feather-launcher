@@ -226,7 +226,7 @@ abstract class CardWidget(context: Context, val item: HomeItem) : FrameLayout(co
     }
 
     protected fun time(t: Long, zone: java.util.TimeZone? = null): String =
-        android.text.format.DateFormat.getTimeFormat(context).apply { zone?.let { timeZone = it } }.format(Date(t))
+        TimeFormat.format(context, t, zone ?: java.util.TimeZone.getDefault())
 
     protected fun dp(v: Int) = Ui.dp(context, v)
 
@@ -474,7 +474,7 @@ class CalendarWidget(context: Context, item: HomeItem) : CardWidget(context, ite
         val today = info.events(now, midnight, 20)
         // The days after, each under its name, as far as two weeks ahead.
         val later = info.events(midnight, midnight + 14 * DAY, 40).filter { it.begin >= midnight || it.allDay }
-        if (same(listOf(narrow, midnight, second, android.text.format.DateFormat.is24HourFormat(context), (today + later).map { listOf(it.id, it.title, it.begin, it.end, it.allDay, it.color) }, today.size))) return
+        if (same(listOf(narrow, midnight, second, TimeFormat.is24(context), (today + later).map { listOf(it.id, it.title, it.begin, it.end, it.allDay, it.color) }, today.size))) return
         content.removeAllViews()
         content.gravity = Gravity.CENTER_VERTICAL
 
@@ -622,7 +622,7 @@ class WeatherWidget(context: Context, item: HomeItem) : CardWidget(context, item
         val w = Weather.at(place) { if (isAttachedToWindow) refresh() }
         // The same forecast in the same size shows the same; only the day names and the hours' labels
         // could still change, with the date and the clock's format.
-        if (same(listOf(compact, narrow, place.name, w ?: "loading", android.text.format.DateFormat.is24HourFormat(context),
+        if (same(listOf(compact, narrow, place.name, w ?: "loading", TimeFormat.is24(context),
                 JewishCalendar.day(System.currentTimeMillis(), java.util.TimeZone.getDefault())))) return
         content.removeAllViews()
         content.spread = false
@@ -732,7 +732,7 @@ class WeatherWidget(context: Context, item: HomeItem) : CardWidget(context, item
         // card shows more days instead of empty space. Days are always lines, never a row like
         // the hours: they're a different thing. Lines go before the hours when there's no room.
         content.addView(FitColumn.dropFirst(gapAbove((forecast(w.hours.filterIndexed { i, _ -> i % 2 == 0 }.take(5).map { h ->
-            Column(android.text.format.DateFormat.format(if (android.text.format.DateFormat.is24HourFormat(context)) "H:mm" else "h a", h.time).toString(),
+            Column(android.text.format.DateFormat.format(if (TimeFormat.is24(context)) "H:mm" else "h a", h.time).toString(),
                 h.sky, h.night, "${h.temperature}°", null, h.rain)
         })), if (compact) 8 else 12), priority = 0))
         if (w.days.isNotEmpty()) {

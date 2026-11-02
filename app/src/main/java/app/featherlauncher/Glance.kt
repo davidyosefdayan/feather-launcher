@@ -57,14 +57,15 @@ class Glance(private val context: Context) {
         }
 
         val coming = ArrayList<Item>()
-        val time = android.text.format.DateFormat.getTimeFormat(context)
-        val placeTime = android.text.format.DateFormat.getTimeFormat(context).apply { timeZone = zone }
+        // As the phone writes times, here and where the place is.
+        val time = { t: Date -> TimeFormat.format(context, t.time) }
+        val placeTime = { t: Date -> TimeFormat.format(context, t.time, zone) }
 
         if (prefs.clockEvent) info.nextEvent(now)?.let { e ->
             val minutes = (e.begin - now) / 60_000
-            val at = if (minutes < 60) "in ${minutes.coerceAtLeast(1)} min" else time.format(Date(e.begin))
+            val at = if (minutes < 60) "in ${minutes.coerceAtLeast(1)} min" else time(Date(e.begin))
             coming += Item(R.drawable.ic_calendar, e.title, at, Tap.EVENT, if (minutes < 60) 0 else 6, e,
-                time = e.begin, clock = if (e.end > e.begin) "${time.format(Date(e.begin))} – ${time.format(Date(e.end))}" else time.format(Date(e.begin)))
+                time = e.begin, clock = if (e.end > e.begin) "${time(Date(e.begin))} – ${time(Date(e.end))}" else time(Date(e.begin)))
         }
 
         // Candle lighting on Friday and Erev Yom Tov, until it's time.
@@ -73,23 +74,23 @@ class Glance(private val context: Context) {
             val erevYomTov = JewishCalendar.isYomTov(today + 1, israel) && !JewishCalendar.isYomTov(today, israel)
             val lighting = Zmanim.sun(now, place, Zmanim.SUNRISE, false)?.minus(prefs.candleMinutes * 60_000L)
             if (lighting != null && now < lighting && weekday != Calendar.SATURDAY && (weekday == Calendar.FRIDAY || erevYomTov)) {
-                coming += Item(R.drawable.ic_sunset, he("Candle lighting", HebrewText::zman), placeTime.format(Date(lighting)), Tap.ZMANIM,
-                    if (lighting - now < 4 * HOUR) 1 else 5, time = lighting, clock = placeTime.format(Date(lighting)))
+                coming += Item(R.drawable.ic_sunset, he("Candle lighting", HebrewText::zman), placeTime(Date(lighting)), Tap.ZMANIM,
+                    if (lighting - now < 4 * HOUR) 1 else 5, time = lighting, clock = placeTime(Date(lighting)))
             }
         }
 
         // In the last hour before shkiah (the end of Mincha), it comes before the alarm and the like.
         val shkiahSoon = prefs.clockZman && sunset != null && now < sunset && sunset - now <= HOUR
-        if (shkiahSoon) coming += Item(R.drawable.ic_sunset, he("Shkiah", HebrewText::zman), placeTime.format(Date(sunset!!)), Tap.ZMANIM, 2,
-            time = sunset, clock = placeTime.format(Date(sunset)))
+        if (shkiahSoon) coming += Item(R.drawable.ic_sunset, he("Shkiah", HebrewText::zman), placeTime(Date(sunset!!)), Tap.ZMANIM, 2,
+            time = sunset, clock = placeTime(Date(sunset)))
 
         // Tonight's alarm, once it's evening.
         if (prefs.glanceAlarm) {
             val alarm = context.getSystemService(AlarmManager::class.java).nextAlarmClock?.triggerTime
             val evening = Calendar.getInstance().apply { timeInMillis = now }.get(Calendar.HOUR_OF_DAY) >= 18
             if (alarm != null && evening && alarm - now < 16 * HOUR) {
-                coming += Item(R.drawable.ic_time, "Alarm", time.format(Date(alarm)), Tap.ALARMS, 4,
-                    time = alarm, clock = time.format(Date(alarm)))
+                coming += Item(R.drawable.ic_time, "Alarm", time(Date(alarm)), Tap.ALARMS, 4,
+                    time = alarm, clock = time(Date(alarm)))
             }
         }
 
@@ -100,8 +101,8 @@ class Glance(private val context: Context) {
         }
 
         if (prefs.clockZman && place != null) info.nextZman(now, place)?.takeIf { !(shkiahSoon && it.name == "Shkiah") }?.let { z ->
-            coming += Item(R.drawable.ic_time, he(z.name, HebrewText::zman), placeTime.format(Date(z.time)), Tap.ZMANIM, 8,
-                time = z.time, clock = placeTime.format(Date(z.time)))
+            coming += Item(R.drawable.ic_time, he(z.name, HebrewText::zman), placeTime(Date(z.time)), Tap.ZMANIM, 8,
+                time = z.time, clock = placeTime(Date(z.time)))
         }
 
         return Lines(date, week.joinToString(" · ").ifEmpty { null }, weather, coming.sortedBy { it.rank }, place)
