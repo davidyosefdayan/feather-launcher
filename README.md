@@ -141,4 +141,6 @@ Only adb can send it. Every part is optional: `categories` and `hidden` replace 
 
 GNU General Public License v3.0; see [LICENSE](LICENSE). You're free to use, change and share Feather Launcher, including your own versions, as long as they stay open source under the same license.
 
+Contributors sign a [Contributor License Agreement](CLA.md) once, on their first pull request: they keep the copyright to their work and let the maintainer use it under any license. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 The [MingCute](https://github.com/Richard9394/MingCute) icons are under the Apache License 2.0 ([docs/MINGCUTE_LICENSE](docs/MINGCUTE_LICENSE)).
