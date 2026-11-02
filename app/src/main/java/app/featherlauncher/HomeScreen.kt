@@ -1397,17 +1397,21 @@ class HomeScreen(
         }
 
         /**
-         * On a full page, the app or folder at ([x], [y]) makes way by going to the page the dragged
-         * one came from, into the place it left, much as it would slide aside were there room.
-         * Null for anything else: a widget in the way, or something dragged in from the dock,
-         * the app list or a folder, as there's no place on a page it left.
+         * On a full page, the app or folder at ([x], [y]) makes way, much as it would slide aside
+         * were there room: dragged from another page, into the place it left there; dragged from
+         * the dock, the app list or a folder, onto the next page with room, or a new one after the
+         * last. Null when a widget is in the way, or a widget is being dragged.
          */
         private fun bumpCandidate(page: Int, x: Int, y: Int): Pair<HomeItem, Triple<Int, Int, Int>>? {
-            val dragged = source?.item ?: return null
-            if (dragged.page < 0 || dragged.page == page || dragged.w != 1 || dragged.h != 1) return null
-            val occupant = workspace.on(page).firstOrNull { it.x == x && it.y == y } ?: return null
+            if (w != 1 || h != 1) return null
+            val dragged = source?.item
+            val occupant = workspace.on(page).firstOrNull { it !== dragged && it.x == x && it.y == y } ?: return null
             if (occupant.w != 1 || occupant.h != 1) return null
-            return occupant to Triple(dragged.page, dragged.x, dragged.y)
+            if (dragged != null && dragged.page >= 0 && dragged.page != page) return occupant to Triple(dragged.page, dragged.x, dragged.y)
+            val next = (page + 1 until workspace.pageCount).firstNotNullOfOrNull { p ->
+                workspace.findSpot(p, 1, 1)?.let { Triple(p, it.first, it.second) }
+            }
+            return occupant to (next ?: Triple(workspace.pageCount, 0, 0))
         }
 
         /** The app sent to the dragged one's old page, with where it goes there. Nothing is saved until drop. */
@@ -1530,6 +1534,12 @@ class HomeScreen(
                 }
                 shifted = emptyMap()
                 bumped?.let { (item, place) ->
+                    // Every page was full: it starts a new one.
+                    if (place.first >= workspace.pageCount) {
+                        workspace.addPage()
+                        pages.addView(newPage())
+                        dots.count = workspace.pageCount
+                    }
                     item.page = place.first
                     item.x = place.second
                     item.y = place.third
