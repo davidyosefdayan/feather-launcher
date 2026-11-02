@@ -4,7 +4,6 @@ import android.app.WallpaperManager
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -66,9 +65,12 @@ object DarkMode {
         if (sp.getString("pair_applied", null) == want) return
         sp.edit().putString("pair_applied", want).apply()
         io.execute {
-            val bitmap = BitmapFactory.decodeFile(pairFile(context, night).path) ?: return@execute
+            // The saved picture is already the wallpaper as it should be: handed over as it is,
+            // not read into memory and made into a picture file again.
             runCatching {
-                WallpaperManager.getInstance(context).setBitmap(bitmap, null, true, WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK)
+                pairFile(context, night).inputStream().use {
+                    WallpaperManager.getInstance(context).setStream(it, null, true, WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK)
+                }
             }
         }
     }
