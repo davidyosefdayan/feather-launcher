@@ -44,7 +44,40 @@ class Overlays(private val root: FrameLayout, private val palette: () -> Palette
             card.requestLayout()
         }
 
-    val isShowing get() = current != null
+    /** A whole screen over the home screen ([PagesScreen]), under any menu or sheet opened from it. */
+    private var screen: View? = null
+    private var onScreenClosed: (() -> Unit)? = null
+    private var focusBeforeScreen: View? = null
+
+    val isShowing get() = current != null || screen != null
+    /** A menu or sheet is open, not just a screen. */
+    val hasPopup get() = current != null
+
+    /** Shows [view] over everything but menus and sheets, until [dismissScreen]. */
+    fun showScreen(view: View, onClosed: () -> Unit) {
+        dismiss()
+        focusBeforeScreen = root.findFocus()
+        screen = view
+        onScreenClosed = onClosed
+        view.alpha = 0f
+        root.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        view.animate().alpha(1f).setDuration(180).start()
+        setUnderlyingFocusable(true)
+    }
+
+    /** Closes the screen (and anything open over it). False if there was none. */
+    fun dismissScreen(): Boolean {
+        val view = screen ?: return false
+        dismiss()
+        screen = null
+        setUnderlyingFocusable(true)
+        focusBeforeScreen?.takeIf { it.isAttachedToWindow && it.isShown && !it.isInTouchMode }?.requestFocus()
+        focusBeforeScreen = null
+        view.animate().alpha(0f).setDuration(160).withEndAction { root.removeView(view) }.start()
+        onScreenClosed?.invoke()
+        onScreenClosed = null
+        return true
+    }
 
     init {
         // A sheet rides up with the keyboard frame by frame, instead of jumping once it's open.
@@ -421,8 +454,10 @@ class Overlays(private val root: FrameLayout, private val palette: () -> Palette
         for (i in 0 until root.childCount) {
             val child = root.getChildAt(i)
             if (child === current) continue
+            // With a screen open, only it can take focus (and not while a menu is over it).
+            val open = focusable && (screen == null || child === screen)
             (child as? ViewGroup)?.descendantFocusability =
-                if (focusable) ViewGroup.FOCUS_AFTER_DESCENDANTS else ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                if (open) ViewGroup.FOCUS_AFTER_DESCENDANTS else ViewGroup.FOCUS_BLOCK_DESCENDANTS
         }
     }
 

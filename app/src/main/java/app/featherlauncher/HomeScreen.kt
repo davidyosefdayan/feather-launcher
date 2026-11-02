@@ -57,7 +57,7 @@ class HomeScreen(
         fun returnToDrawer(entry: AppEntry, x: Float, y: Float)
         /** Cancels the touch gesture currently going to the views, once a drag takes it over. */
         fun cancelViewTouches()
-        /** The home screen's own options (Add widget, Wallpaper, Settings). */
+        /** The home screen's own options (Add widget, Pages, Wallpaper, Settings). */
         fun homeMenuItems(): List<MenuItem>
     }
 
@@ -206,17 +206,22 @@ class HomeScreen(
     fun onAppsChanged() {
         fillDefaultDock()
         // Drop apps that were uninstalled (only once the app list is known), and hidden apps,
-        // which are never on the home screen.
+        // which are never on the home screen. Hidden pages too, so an app is never brought back
+        // with its page after it's gone.
         if (repo.apps.isNotEmpty()) {
             fun gone(key: String) = repo.find(key) == null || key in prefs.hidden
-            val inFolders = workspace.items.filter { it.type == HomeItem.Type.FOLDER }.flatMap { folder ->
-                folder.apps.filter(::gone).map { folder to it }
-            }
-            inFolders.forEach { (folder, key) -> removeFromFolder(folder, key) }
-            val gone = workspace.items.filter { it.type == HomeItem.Type.APP && gone(it.ref) }
-            if (gone.isNotEmpty() || inFolders.isNotEmpty()) {
-                workspace.items.removeAll(gone)
+            var changed = false
+            for (list in listOf(workspace.items) + workspace.hidden.map { it.items }) {
+                val inFolders = list.filter { it.type == HomeItem.Type.FOLDER }.flatMap { folder ->
+                    folder.apps.filter(::gone).map { folder to it }
+                }
+                inFolders.forEach { (folder, key) -> removeFromFolder(folder, key, list) }
+                val gone = list.filter { it.type == HomeItem.Type.APP && gone(it.ref) }
+                list.removeAll(gone)
                 gone.forEach { views.remove(it.id)?.let { v -> (v.parent as? ViewGroup)?.removeView(v) } }
+                if (gone.isNotEmpty() || inFolders.isNotEmpty()) changed = true
+            }
+            if (changed) {
                 workspace.removeEmptyPages()
                 workspace.save()
             }
@@ -256,23 +261,7 @@ class HomeScreen(
         val now = System.currentTimeMillis()
         for (item in workspace.items) {
             val view = views[item.id] ?: createView(item)?.also { views[item.id] = it } ?: continue
-            if (view is AppIconView) {
-                val showLabel = !item.inDock && prefs.showLabels
-                if (item.type == HomeItem.Type.FOLDER) {
-                    // As on iOS, a folder's badge adds up its apps' (locked ones don't count).
-                    val badge = item.apps.mapNotNull(repo::find).distinctBy { it.packageName }
-                        .filter { !limits.isLocked(it.packageName, now) }.sumOf { prefs.badgeCount(it.packageName) }
-                    view.bind(folderIcon(item), item.label ?: FOLDER_NAME, showLabel, badge = badge,
-                        iconDp = homeIcon())
-                } else {
-                    val entry = repo.find(item.ref)
-                    view.bind(entry?.let(repo::icon), item.label ?: entry?.label.orEmpty(), showLabel,
-                        locked = entry != null && limits.isLocked(entry.packageName, now),
-                        isNew = entry != null && newApps.isNew(entry),
-                        badge = entry?.let { prefs.badgeCount(it.packageName) } ?: 0,
-                        iconDp = homeIcon())
-                }
-            }
+            bindItem(item, view, limits, newApps, now)
             val target = containerFor(item.page)
             val lp = view.layoutParams as? CellLayout.LayoutParams
             if (view.parent !== target || lp == null || lp.x != item.x || lp.y != item.y || lp.w != item.w || lp.h != item.h) {
@@ -306,6 +295,25 @@ class HomeScreen(
         for (view in views.values) {
             (view as? ClockWidget)?.refresh()
             (view as? CardWidget)?.refresh()
+        }
+    }
+
+    private fun bindItem(item: HomeItem, view: View, limits: AppLimits, newApps: NewApps, now: Long) {
+        if (view !is AppIconView) return
+        val showLabel = !item.inDock && prefs.showLabels
+        if (item.type == HomeItem.Type.FOLDER) {
+            // As on iOS, a folder's badge adds up its apps' (locked ones don't count).
+            val badge = item.apps.mapNotNull(repo::find).distinctBy { it.packageName }
+                .filter { !limits.isLocked(it.packageName, now) }.sumOf { prefs.badgeCount(it.packageName) }
+            view.bind(folderIcon(item), item.label ?: FOLDER_NAME, showLabel, badge = badge,
+                iconDp = homeIcon())
+        } else {
+            val entry = repo.find(item.ref)
+            view.bind(entry?.let(repo::icon), item.label ?: entry?.label.orEmpty(), showLabel,
+                locked = entry != null && limits.isLocked(entry.packageName, now),
+                isNew = entry != null && newApps.isNew(entry),
+                badge = entry?.let { prefs.badgeCount(it.packageName) } ?: 0,
+                iconDp = homeIcon())
         }
     }
 
@@ -550,6 +558,50 @@ class HomeScreen(
 
     // endregion
 
+    // region Pages
+
+    /**
+     * A hidden page laid out as it would be on the home screen, with views of its own, for its
+     * picture in [PagesScreen]. Nothing on it can be used.
+     */
+    fun buildPage(items: List<HomeItem>): CellLayout {
+        val page = newPage()
+        page.names = prefs.showLabels
+        page.iconDp = homeIcon()
+        val limits = AppLimits.get(activity)
+        val newApps = NewApps.get(activity)
+        val now = System.currentTimeMillis()
+        for (item in items) {
+            val view = createView(item) ?: continue
+            bindItem(item, view, limits, newApps, now)
+            page.place(view, item.x, item.y, item.w, item.h)
+        }
+        return page
+    }
+
+    /** Hides or shows the page at [position] among all of them. */
+    fun setPageHidden(position: Int, hide: Boolean) = changePages { it[position] = Workspace.Page(it[position].items, hide) }
+
+    fun movePage(from: Int, to: Int) = changePages { it.add(to, it.removeAt(from)) }
+
+    /**
+     * Deletes the hidden page at [position]. Its apps stay in the app list; other apps' widgets on
+     * it are let go, and Feather's own simply go with it.
+     */
+    fun deletePage(position: Int) = changePages { pages ->
+        pages.removeAt(position).items.filter { it.type == HomeItem.Type.WIDGET }.forEach { widgets.delete(it.ref.toInt()) }
+    }
+
+    private fun changePages(change: (MutableList<Workspace.Page>) -> Unit) {
+        val pages = workspace.allPages().toMutableList()
+        change(pages)
+        workspace.arrange(pages)
+        workspace.save()
+        bindAll()
+    }
+
+    // endregion
+
     // region Menus
 
     private fun onItemLongPress(item: HomeItem, view: View) {
@@ -738,13 +790,13 @@ class HomeScreen(
     }
 
     /** Takes [key] out; a folder left with one app becomes that app, an empty one disappears. */
-    private fun removeFromFolder(folder: HomeItem, key: String) {
+    private fun removeFromFolder(folder: HomeItem, key: String, list: MutableList<HomeItem> = workspace.items) {
         folder.apps.remove(key)
         when (folder.apps.size) {
-            0 -> workspace.items.remove(folder)
+            0 -> list.remove(folder)
             1 -> {
-                workspace.items.remove(folder)
-                workspace.add(folder.page, folder.x, folder.y, 1, 1, HomeItem.Type.APP, folder.apps.first())
+                list.remove(folder)
+                list += HomeItem(workspace.nextId(), folder.page, folder.x, folder.y, 1, 1, HomeItem.Type.APP, folder.apps.first())
             }
         }
     }

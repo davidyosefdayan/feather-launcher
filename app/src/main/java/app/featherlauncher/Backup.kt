@@ -103,10 +103,16 @@ object Backup {
      */
     private fun dropWidgets(file: File) = runCatching {
         val json = JSONObject(file.readText())
-        val items = json.getJSONArray("items")
-        val kept = JSONArray()
-        for (i in 0 until items.length()) items.getJSONObject(i).let { if (it.optString("type") != "WIDGET") kept.put(it) }
-        file.writeText(json.put("items", kept).toString())
+        fun drop(page: JSONObject) {
+            val items = page.getJSONArray("items")
+            val kept = JSONArray()
+            for (i in 0 until items.length()) items.getJSONObject(i).let { if (it.optString("type") != "WIDGET") kept.put(it) }
+            page.put("items", kept)
+        }
+        drop(json)
+        // Hidden pages too (one left with nothing on it is dropped when the layout loads).
+        json.optJSONArray("hidden")?.let { pages -> for (i in 0 until pages.length()) drop(pages.getJSONObject(i)) }
+        file.writeText(json.toString())
     }
 
     /**
