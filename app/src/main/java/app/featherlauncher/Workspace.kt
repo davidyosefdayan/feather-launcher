@@ -100,11 +100,20 @@ class Workspace(context: Context) {
                 if (it.apps.isNotEmpty()) put("apps", JSONArray(it.apps))
             })
         }
-        val tmp = File(file.path + ".tmp")
-        tmp.writeText(JSONObject().put("pages", pageCount).put("lastId", lastId).put("items", array).toString())
-        tmp.renameTo(file)
+        val text = JSONObject().put("pages", pageCount).put("lastId", lastId).put("items", array).toString()
         isNew = false
+        // Written in the background (in order, so the last save wins), and only when something changed.
+        if (text == saved) return
+        saved = text
+        writer.execute {
+            val tmp = File(file.path + ".tmp")
+            tmp.writeText(text)
+            tmp.renameTo(file)
+        }
     }
+
+    /** What's in the file, as last saved here. */
+    private var saved: String? = null
 
     fun nextId(): Long {
         lastId = maxOf(lastId, items.maxOfOrNull { it.id } ?: 0L) + 1
@@ -163,6 +172,9 @@ class Workspace(context: Context) {
     }
 
     companion object {
+        /** Saves the home screen's layout off the main thread. */
+        private val writer = java.util.concurrent.Executors.newSingleThreadExecutor()
+
         const val DOCK = -1
         const val COLS = 4
         /**

@@ -37,10 +37,11 @@ class LimitActivity : Activity() {
     /** When the wait started (elapsed realtime), or 0 when not waiting. */
     private var waitStarted = 0L
 
+    /** Smoothly while the wait's bar fills, otherwise once a second: nothing else on it moves faster. */
     private val tick = object : Runnable {
         override fun run() {
             update()
-            button.postDelayed(this, 100)
+            button.postDelayed(this, if (waitStarted != 0L) 100 else 1000 - System.currentTimeMillis() % 1000)
         }
     }
 
@@ -179,22 +180,23 @@ class LimitActivity : Activity() {
         val now = System.currentTimeMillis()
         if (now < limits.readyAt(pkg, limit)) return
         waitStarted = if (waitStarted == 0L) SystemClock.elapsedRealtime() else 0L
-        update()
+        button.removeCallbacks(tick)
+        tick.run()
     }
 
     private fun update() {
         val limit = limit ?: return
         val now = System.currentTimeMillis()
         // A limit that's on all day, every day, never ends; others say when they do.
-        until.text = if (limit.allDay && limit.days == AppLimits.ALL_DAYS) limit.name
-            else limit.endsAt(now)?.let { "${limit.name} until ${AppLimits.formatTime(this, it)}" } ?: limit.name
+        until.show(if (limit.allDay && limit.days == AppLimits.ALL_DAYS) limit.name
+            else limit.endsAt(now)?.let { "${limit.name} until ${AppLimits.formatTime(this, it)}" } ?: limit.name)
         if (limit.strictness == Strictness.BLOCK) return
         val ready = limits.readyAt(pkg, limit)
         val minutes = limit.openMinutes
         when {
             now < ready -> {
                 val left = ((ready - now + 999) / 1000).toInt()
-                button.text = "Can open again in %d:%02d".format(left / 60, left % 60)
+                button.show("Can open again in %d:%02d".format(left / 60, left % 60))
                 button.alpha = 0.6f
                 progress.level = 0
             }
@@ -206,16 +208,21 @@ class LimitActivity : Activity() {
                     return openApp()
                 }
                 val left = ((total - elapsed + 999) / 1000).toInt()
-                button.text = "Opening in $left sec · Tap to cancel"
+                button.show("Opening in $left sec · Tap to cancel")
                 button.alpha = 1f
                 progress.level = (elapsed * 10000 / total).toInt()
             }
             else -> {
-                button.text = "Open for $minutes min"
+                button.show("Open for $minutes min")
                 button.alpha = 1f
                 progress.level = 0
             }
         }
+    }
+
+    /** Sets the text only when it's new; setting the same text lays the screen out again. */
+    private fun TextView.show(words: String) {
+        if (text.toString() != words) text = words
     }
 
     private fun openApp() {

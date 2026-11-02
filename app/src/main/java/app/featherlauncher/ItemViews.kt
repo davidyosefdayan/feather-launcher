@@ -55,12 +55,23 @@ class AppIconView(context: Context, val item: HomeItem) : LinearLayout(context) 
             icon.layoutParams = LayoutParams(dp(size + 2 * INSET), dp(size + 2 * INSET))
             icon.background = Ui.focusHighlight(context, corner + INSET)
         }
-        icon.setImageBitmap(bitmap)
-        IconBadges.apply(icon, locked, isNew, size + 2 * INSET, badge)
-        label.text = name
+        // Coming home binds every icon again; most have nothing new, and each change redraws it.
+        if (bitmap !== shownBitmap) {
+            shownBitmap = bitmap
+            icon.setImageBitmap(bitmap)
+        }
+        val marks = listOf(locked, isNew, size, badge)
+        if (marks != shownMarks) {
+            shownMarks = marks
+            IconBadges.apply(icon, locked, isNew, size + 2 * INSET, badge)
+        }
+        if (label.text.toString() != name) label.text = name
         label.visibility = if (showLabel) VISIBLE else GONE
         contentDescription = name
     }
+
+    private var shownBitmap: Bitmap? = null
+    private var shownMarks: List<Any>? = null
 
     /** The icon's bounds in this view, for the keypad highlight and drag image. */
     val iconView: ImageView get() = icon
@@ -83,9 +94,13 @@ class AppIconView(context: Context, val item: HomeItem) : LinearLayout(context) 
 
         /** The letter spacing for [name] in [room] px: a little closer when that makes it fit. */
         fun nameSpacing(paint: android.graphics.Paint, name: String, room: Float): Float {
-            fun width(spacing: Float) = android.text.TextPaint(paint).apply { letterSpacing = spacing }.measureText(name)
+            measuring.set(paint)
+            fun width(spacing: Float) = measuring.apply { letterSpacing = spacing }.measureText(name)
             return if (width(0f) > room && width(TIGHT) <= room) TIGHT else 0f
         }
+
+        /** A copy of the paint to measure with, made once rather than twice per name measured (on the main thread only). */
+        private val measuring = android.text.TextPaint()
 
         /** The home screen's icons, on pages and in the dock alike, as on iOS. */
         const val ICON = 62

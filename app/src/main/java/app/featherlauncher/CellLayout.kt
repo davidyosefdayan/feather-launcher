@@ -254,6 +254,15 @@ class CellLayout(context: Context, attrs: AttributeSet? = null) : ViewGroup(cont
     override fun shouldDelayChildPressedState() = false
 
     fun place(view: View, x: Int, y: Int, w: Int, h: Int) {
+        // Moved within this page, it just moves: taking it off and putting it back made a widget
+        // stop and start again (its tick, its refresh) at every step of a resize.
+        val lp = view.layoutParams as? LayoutParams
+        if (view.parent === this && lp != null) {
+            lp.x = x; lp.y = y; lp.w = w; lp.h = h
+            view.requestLayout()
+            invalidate()
+            return
+        }
         (view.parent as? ViewGroup)?.removeView(view)
         addView(view, LayoutParams(x, y, w, h))
     }
