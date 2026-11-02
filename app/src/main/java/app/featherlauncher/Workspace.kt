@@ -175,20 +175,44 @@ class Workspace(context: Context) {
 
         /** Space above the first row; the page's outline while dragging starts here. */
         const val PAGE_TOP = 6
-        /** The least height of a cell: an icon with its highlight, its name, and a little room. */
-        private const val MIN_CELL = AppIconView.BOX + AppIconView.LABEL_HEIGHT + 4
+        /** The screen's width (dp), set by [fitRows]. */
+        private var widthDp = 0f
+
+        /**
+         * How much smaller the home screen's icons and the dock are on a narrow screen: enough
+         * that the dock has as much room between its icons as at its edges, and an icon with its
+         * highlight fits its column. 1 where they fit as they are.
+         */
+        private fun scale(names: Boolean): Float {
+            if (widthDp == 0f) return 1f
+            val icon = if (names) AppIconView.ICON else AppIconView.LARGE_ICON
+            // Pages are inset from the screen's edges as much as the dock is.
+            val width = widthDp - 2 * Ui.BAR_MARGIN
+            // The dock's icons and the gaps beside them, each as wide as the room above them.
+            val dock = width / (DOCK_COLS * icon + (DOCK_COLS + 1) * (Ui.DOCK_HEIGHT - icon) / 2f)
+            val page = (width / COLS - 2 * AppIconView.INSET) / icon
+            return minOf(1f, dock, page)
+        }
+
+        /** The home screen's icons (dp), on pages and in the dock: [AppIconView.ICON], or [AppIconView.LARGE_ICON] with no names. */
+        fun icon(names: Boolean) = ((if (names) AppIconView.ICON else AppIconView.LARGE_ICON) * scale(names)).toInt()
+
+        /** The dock's height (dp): [Ui.DOCK_HEIGHT], made as much smaller as the icons. */
+        fun dockHeight(names: Boolean) = kotlin.math.round(Ui.DOCK_HEIGHT * scale(names)).toInt()
 
         fun fitRows(activity: android.app.Activity) {
             val window = activity.windowManager.currentWindowMetrics
             val bars = window.windowInsets.getInsets(android.view.WindowInsets.Type.systemBars())
             val density = activity.resources.displayMetrics.density
-            val widthDp = window.bounds.width() / density
+            widthDp = window.bounds.width() / density
             // The page's share of the screen (see activity_home.xml): all but the system bars, the
             // page's top margin and [PAGE_TOP], the page dots, and the dock with its bottom margin.
-            val pageDp = (window.bounds.height() - bars.top - bars.bottom) / density - 8 - PAGE_TOP - 20 - Ui.DOCK_HEIGHT - 16
-            // Pages are inset from the screen's edges as much as the dock is.
+            // Counted with names, so turning them off doesn't change the rows.
+            val pageDp = (window.bounds.height() - bars.top - bars.bottom) / density - 8 - PAGE_TOP - 20 - dockHeight(true) - 16
+            // The least height of a cell: an icon with its highlight, its name, and a little room.
+            val minCell = icon(true) + 2 * AppIconView.INSET + AppIconView.LABEL_HEIGHT + 4
             val cellDp = (widthDp - 2 * Ui.BAR_MARGIN) / COLS
-            ROWS = kotlin.math.round(pageDp / cellDp).toInt().coerceAtMost((pageDp / MIN_CELL).toInt()).coerceIn(3, 7)
+            ROWS = kotlin.math.round(pageDp / cellDp).toInt().coerceAtMost((pageDp / minCell).toInt()).coerceIn(3, 7)
         }
         const val DOCK_COLS = 4
     }

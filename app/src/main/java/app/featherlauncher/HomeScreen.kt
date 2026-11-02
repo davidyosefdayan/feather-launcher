@@ -286,16 +286,17 @@ class HomeScreen(
         pages.updateFocusability()
     }
 
-    /** The home screen's icons, the same on pages and in the dock; bigger with no names under them. */
-    private fun homeIcon() = if (prefs.showLabels) AppIconView.ICON else AppIconView.LARGE_ICON
+    /** The home screen's icons, the same on pages and in the dock; bigger with no names under them, smaller on a narrow screen. */
+    private fun homeIcon() = Workspace.icon(prefs.showLabels)
 
     /**
-     * The dock is always [Ui.DOCK_HEIGHT] tall, as on iOS: bigger icons have less room around them.
-     * The room from its edges to the icons is the same on every side.
+     * The dock is always [Ui.DOCK_HEIGHT] tall, as on iOS (less on a narrow screen, see
+     * [Workspace.dockHeight]): bigger icons have less room around them. The room from its
+     * edges to the icons is the same on every side.
      */
     private fun sizeDock() {
         val icon = homeIcon()
-        val gap = (Ui.DOCK_HEIGHT - icon) / 2
+        val gap = (Workspace.dockHeight(prefs.showLabels) - icon) / 2
         dock.edgeGap = dp(gap)
         dock.iconSize = dp(icon)
         dock.boxDp = icon + 2 * AppIconView.INSET
