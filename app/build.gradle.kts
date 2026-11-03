@@ -28,7 +28,7 @@ android {
         minSdk = 30
         targetSdk = 37
         // Raise for every release; the updater compares it with the release's tag (v1.1).
-        val release = "1.6"
+        val release = "1.7"
         versionCode = commits
         versionName = if (beta) "$release beta $commits" else release
     }
