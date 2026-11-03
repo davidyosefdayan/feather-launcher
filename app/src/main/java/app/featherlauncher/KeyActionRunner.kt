@@ -2,6 +2,8 @@ package app.featherlauncher
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
+import android.app.Activity
+import android.app.KeyguardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -21,6 +23,9 @@ object KeyActionRunner {
     private var torchWatched = false
 
     fun run(context: Context, action: KeyAction, service: AccessibilityService?) {
+        if (action.type.needsUnlock && context.getSystemService(KeyguardManager::class.java).isKeyguardLocked) {
+            return start(context, Intent(context, UnlockActivity::class.java).putExtra(UnlockActivity.EXTRA_ACTION, action.toJson().toString()))
+        }
         when (action.type) {
             ActionType.APP -> ComponentName.unflattenFromString(action.value ?: return)?.let { component ->
                 start(context, Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setComponent(component)
@@ -78,11 +83,10 @@ object KeyActionRunner {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_MEDIA_PREVIOUS -> mediaKey(context, keyCode)
             KeyEvent.KEYCODE_BACK -> (context as? AccessibilityService)?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
             KeyEvent.KEYCODE_HOME -> (context as? AccessibilityService)?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
-            KeyEvent.KEYCODE_STAR, KeyEvent.KEYCODE_POUND -> {
-                // Typed into the text box being edited, if there is one.
-                if ((context as? LauncherService)?.type(if (keyCode == KeyEvent.KEYCODE_STAR) "*" else "#") != true) return false
+            else -> {
+                // Numbers, * and #: typed into the text box being edited, if there is one.
+                if (!KeyShortcuts.typesInTextBoxes(keyCode) || (context as? LauncherService)?.type(KeyShortcuts.typed(keyCode)) != true) return false
             }
-            else -> return false
         }
         return true
     }
@@ -133,5 +137,34 @@ object KeyActionRunner {
         } catch (e: Exception) {
             Toast.makeText(context, "Nothing on this phone can do that", Toast.LENGTH_SHORT).show()
         }
+    }
+}
+
+/**
+ * Asks Android to unlock the phone (PIN and all) for a shortcut used on the lock screen that
+ * needs it, like opening an app, then does it. Nothing happens if unlocking is cancelled.
+ */
+class UnlockActivity : Activity() {
+    private var asked = false
+
+    // Asked once it's in front: asked any sooner, Android cancels right away.
+    override fun onResume() {
+        super.onResume()
+        if (asked) return
+        asked = true
+        val action = intent.getStringExtra(EXTRA_ACTION)?.let { runCatching { KeyAction.fromJson(org.json.JSONObject(it)) }.getOrNull() }
+            ?: return finish()
+        getSystemService(KeyguardManager::class.java).requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
+            override fun onDismissSucceeded() {
+                KeyActionRunner.run(this@UnlockActivity, action, LauncherService.running)
+                finish()
+            }
+            override fun onDismissCancelled() = finish()
+            override fun onDismissError() = finish()
+        })
+    }
+
+    companion object {
+        const val EXTRA_ACTION = "action"
     }
 }
