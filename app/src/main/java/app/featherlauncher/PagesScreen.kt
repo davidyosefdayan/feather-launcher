@@ -42,6 +42,11 @@ class PagesScreen(
         val widthDp = activity.resources.displayMetrics.run { widthPixels / density }
         grid = Grid(if (widthDp >= 360) 3 else 2, pageHeight.toFloat() / pageWidth)
         val focused = homeScreen.pages.currentPage
+        // Where the page on the home screen is, with its room above and below, to zoom from and back to.
+        val at = IntArray(2).also { homeScreen.pages.getLocationInWindow(it) }
+        val rootAt = IntArray(2).also { (home.parent as View).getLocationInWindow(it) }
+        full = Rect(at[0] - rootAt[0], at[1] - rootAt[1] - source.roomAbove, 0, 0)
+            .apply { right = left + pageWidth; bottom = top + pageHeight }
         // The pages themselves, not pictures of them: they stay as they are while they're
         // shown, hidden or moved here, and go back to the home screen on closing.
         homeScreen.workspace.allPages().zip(homeScreen.lendPages()).forEach { (page, cells) ->
@@ -75,34 +80,118 @@ class PagesScreen(
             setPadding(0, 0, 0, insets.bottom + dp(Ui.SPACE_L))
             addView(grid)
         }
+        this.header = header
+        this.scroll = scroll
         val screen = object : LinearLayout(activity) {
             // Taps on the gaps between pages stop here, not on the home screen.
             @SuppressLint("ClickableViewAccessibility")
             override fun onTouchEvent(event: MotionEvent) = true
         }.apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(p.drawer)
+            background = backdrop
             setPadding(0, insets.top, 0, 0)
             addView(header)
             addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
-        // The home screen steps aside while its pages are here.
-        home.animate().cancel()
-        home.visibility = View.INVISIBLE
-        home.alpha = 0f
-        overlays.showScreen(screen) {
-            // Once this has faded out, the pages go back and the home screen fades in with them.
-            home.postDelayed({
-                homeScreen.returnPages(grid.tiles.filter { !it.hidden }.map { it.cells })
-                home.visibility = View.VISIBLE
-                home.animate().alpha(1f).setDuration(180).start()
-            }, CLOSE)
+        this.screen = screen
+        overlays.showScreen(screen) { remove ->
+            // The page to be showing on the home screen grows back into place, then is put there.
+            val shown = grid.tiles.filter { !it.hidden }
+            val tile = shown[homeScreen.pages.currentPage.coerceAtMost(shown.size - 1)]
+            transition(tile, opening = false) {
+                homeScreen.returnPages(shown.map { it.cells })
+                remove()
+            }
         }
-        if (!grid.isInTouchMode) grid.post {
-            // With the keypad, start on the page that was showing.
-            grid.tiles.filter { !it.hidden }.getOrNull(focused)?.requestFocus()
+        // The page that was showing shrinks into its place here as everything else comes in.
+        val tile = grid.tiles.filter { !it.hidden }[focused]
+        screen.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                screen.viewTreeObserver.removeOnPreDrawListener(this)
+                transition(tile, opening = true) {}
+                return true
+            }
+        })
+        if (!grid.isInTouchMode) grid.post { tile.requestFocus() }
+    }
+
+    private lateinit var full: Rect
+    private lateinit var screen: ViewGroup
+    private lateinit var header: View
+    private lateinit var scroll: ViewGroup
+    private val backdrop by lazy { android.graphics.drawable.ColorDrawable(p.drawer) }
+
+    /**
+     * Between the home screen and this, together: [tile]'s page zooms between its full size on
+     * the home screen and its place here, the home screen's dock and dots fall back and fade,
+     * and the rest of this fades in around the page (or the other way, closing).
+     */
+    private fun transition(tile: Tile, opening: Boolean, done: () -> Unit) {
+        val picture = tile.picture
+        val pictureAt = IntArray(2).also { picture.getLocationInWindow(it) }
+        val rootAt = IntArray(2).also { (home.parent as View).getLocationInWindow(it) }
+        // Without any zoom of its own (it may be mid-way, closing while it opens).
+        val left = pictureAt[0] - rootAt[0] - picture.translationX
+        val top = pictureAt[1] - rootAt[1] - picture.translationY
+        val bigger = full.width().toFloat() / picture.width.coerceAtLeast(1)
+        val backdropAlpha = android.graphics.Color.alpha(p.drawer)
+        val others = grid.tiles.filter { it !== tile } + header
+        val extras = listOf(tile.switchView, tile.deleteView)
+        // The zooming page may reach past the list it's in.
+        screen.clipChildren = false
+        scroll.clipChildren = false
+        tile.translationZ = 1f
+        picture.pivotX = 0f
+        picture.pivotY = 0f
+        home.visibility = View.VISIBLE
+        home.pivotX = home.width / 2f
+        home.pivotY = home.height / 2f
+        fun apply(t: Float) {
+            val scale = bigger + (1 - bigger) * t
+            picture.scaleX = scale
+            picture.scaleY = scale
+            picture.translationX = (full.left - left) * (1 - t)
+            picture.translationY = (full.top - top) * (1 - t)
+            picture.background.alpha = (255 * t).toInt()
+            backdrop.alpha = (backdropAlpha * t).toInt()
+            val rest = ((t - 0.25f) / 0.75f).coerceIn(0f, 1f)
+            for (view in others) {
+                view.alpha = rest
+                view.scaleX = 0.94f + 0.06f * rest
+                view.scaleY = 0.94f + 0.06f * rest
+            }
+            extras.forEach { it.alpha = if (it === tile.deleteView && !tile.hidden) 0f else rest }
+            home.alpha = 1 - t
+            home.scaleX = 1 - 0.06f * t
+            home.scaleY = 1 - 0.06f * t
+        }
+        animator?.cancel()
+        val from = if (opening) 0f else (animator?.animatedValue as? Float ?: 1f)
+        animator = android.animation.ValueAnimator.ofFloat(from, if (opening) 1f else 0f).apply {
+            duration = TRANSITION
+            interpolator = android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f)
+            addUpdateListener { apply(it.animatedValue as Float) }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                private var cancelled = false
+                override fun onAnimationCancel(animation: android.animation.Animator) { cancelled = true }
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (cancelled) return
+                    screen.clipChildren = true
+                    scroll.clipChildren = true
+                    tile.translationZ = 0f
+                    if (opening) home.visibility = View.INVISIBLE
+                    home.scaleX = 1f
+                    home.scaleY = 1f
+                    home.alpha = if (opening) 0f else 1f
+                    done()
+                }
+            })
+            apply(from)
+            start()
         }
     }
+
+    private var animator: android.animation.ValueAnimator? = null
 
     /** A page drawn at the size of its picture. */
     private val scalePage = View.OnLayoutChangeListener { v, left, _, right, _, _, _, _, _ ->
@@ -188,6 +277,8 @@ class PagesScreen(
             background = Ui.focusRing(activity, Ui.RADIUS_M + RING_GAP, p.onWall)
             isDuplicateParentStateEnabled = true
         }
+        val switchView get() = switch
+        val deleteView get() = delete
         private val switch = FeatherSwitch(activity, p, !hidden).apply { onWall = true }
         private val delete = ImageView(activity).apply {
             setImageResource(R.drawable.ic_delete)
@@ -402,7 +493,6 @@ class PagesScreen(
         /** Room between a page's picture and the keypad's ring around it (dp). */
         private const val RING_GAP = 4
         private const val DELETE = 32
-        /** How long the screen takes to fade out (see [Overlays.dismissScreen]). */
-        private const val CLOSE = 160L
+        private const val TRANSITION = 340L
     }
 }
