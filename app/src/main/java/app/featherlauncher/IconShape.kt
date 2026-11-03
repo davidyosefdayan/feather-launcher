@@ -81,8 +81,7 @@ enum class IconShape(val label: String, val corner: Float) {
         } else {
             drawable.setBounds(0, 0, size, size)
             drawable.draw(canvas)
-            val corners = listOf(layers.getPixel(1, 1), layers.getPixel(size - 2, 1), layers.getPixel(1, size - 2), layers.getPixel(size - 2, size - 2))
-            legacyWithOwnShape = corners.any { Color.alpha(it) < 250 }
+            legacyWithOwnShape = showsThrough(layers)
         }
         // An old-style full picture: its plate is lifted out the same way as for adaptive icons.
         if (look != IconLook.NORMAL && drawable !is AdaptiveIconDrawable && !legacyWithOwnShape) IconLooks.darkenWhole(layers)
@@ -105,5 +104,29 @@ enum class IconShape(val label: String, val corner: Float) {
         }
         layers.recycle()
         return out
+    }
+
+    /**
+     * Whether any of [icon]'s see-through parts would show once it's cut to this shape. An old-style
+     * icon whose own outline is cut away by ours (a full square, or rounded corners that fit
+     * within ours) has a background and is cut out like any other; one that would leave gaps (a
+     * logo, a round icon in a squircle, a picture with a margin) has its own shape.
+     */
+    private fun showsThrough(icon: Bitmap): Boolean {
+        val size = icon.width
+        val mask = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        Canvas(mask).drawPath(path(size.toFloat()), Paint(Paint.ANTI_ALIAS_FLAG))
+        val inside = IntArray(size * size).also { mask.getPixels(it, 0, size, 0, 0, size, size) }
+        mask.recycle()
+        val pixels = IntArray(size * size).also { icon.getPixels(it, 0, size, 0, 0, size, size) }
+        // How much of the shape is see-through, in whole pixels, leaving out the shape's own soft
+        // edge. Where the icon's outline and ours meet (a round icon in the circle), its soft edge
+        // leaves a ring about a pixel wide, so up to about that much is allowed.
+        var clear = 0f
+        for (i in pixels.indices) {
+            if (Color.alpha(inside[i]) < 255) continue
+            clear += (255 - Color.alpha(pixels[i])) / 255f
+        }
+        return clear > size * 2f
     }
 }

@@ -85,7 +85,9 @@ object IconLooks {
     fun darkenWhole(whole: Bitmap) {
         val copy = whole.copy(Bitmap.Config.ARGB_8888, false)
         whole.eraseColor(0)
-        drawDark(Canvas(whole), whole.width, liftPlate(copy)?.let { it.first to it.second }, copy)
+        // A whole picture is only lifted off a truly plain plate; on a shaded or textured one the
+        // cut would be ragged, so the icon stays as it is, whole.
+        drawDark(Canvas(whole), whole.width, liftPlate(copy, plain = true)?.let { it.first to it.second }, copy)
     }
 
     /** The symbol on charcoal, made readable; or the icon unchanged if no clear symbol was found. */
@@ -134,7 +136,7 @@ object IconLooks {
      * where the symbol begins. Returns the symbol and the removed color, or null if the edge isn't
      * one plain color or nearly nothing would be left.
      */
-    private fun liftPlate(b: Bitmap): Pair<Bitmap, Int?>? {
+    private fun liftPlate(b: Bitmap, plain: Boolean = false): Pair<Bitmap, Int?>? {
         val w = b.width
         val h = b.height
         val pixels = IntArray(w * h)
@@ -161,6 +163,8 @@ object IconLooks {
             val candidate = opaque.groupBy { quantize(it) }.maxByOrNull { it.value.size }!!.value.let(::averageOf)
             val onPlate = opaque.count { distance(it, candidate) <= TOLERANCE }
             if (onPlate < opaque.size * 0.6f) continue
+            // [plain]: nearly all of the ring one even color, not a gradient within the tolerance.
+            if (plain && opaque.count { distance(it, candidate) <= TOLERANCE / 3 } < opaque.size * 0.9f) continue
             // A deliberate two-color design (Translate's blue and white halves) has no single plate.
             val rest = opaque.filter { distance(it, candidate) > TOLERANCE }
             if (rest.size >= opaque.size * 0.4f && rest.count { distance(it, averageOf(rest)) <= TOLERANCE } >= rest.size * 0.8f) return null
