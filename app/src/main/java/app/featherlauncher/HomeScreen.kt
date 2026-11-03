@@ -566,17 +566,17 @@ class HomeScreen(
     /** The Pages screen has the pages' grids: nothing is put on them until they're back. */
     private var lent = false
 
+    /** The shown pages' grids, in order. */
+    fun shownPages(): List<CellLayout> = (0 until pages.pageCount).map { pages.page(it) }
+
     /**
-     * Every page's grid in order, for [PagesScreen] to show: the shown pages' own, and the hidden
-     * ones laid out as they'd be on the home screen. The grids themselves move, so nothing on them
-     * is made again or moved however the pages change; the home screen has none until [returnPages].
+     * Gives the shown pages' grids to [PagesScreen], which puts them in its own pictures. The grids
+     * themselves move, so nothing on them is made again or moved however the pages change; the
+     * home screen has none until [returnPages].
      */
-    fun lendPages(): List<CellLayout> {
-        val shown = (0 until pages.pageCount).map { pages.page(it) }
+    fun lendPages() {
         pages.removeAllViews()
         lent = true
-        var next = 0
-        return workspace.allPages().map { if (it.hidden) buildPage(it.items) else shown[next++] }
     }
 
     /** Takes back the grids of the pages that are shown now, in their order. */
@@ -593,7 +593,8 @@ class HomeScreen(
         bindAll()
     }
 
-    private fun buildPage(items: List<HomeItem>): CellLayout {
+    /** A hidden page laid out as it would be on the home screen, for [PagesScreen]. */
+    fun buildPage(items: List<HomeItem>): CellLayout {
         val page = newPage()
         page.names = prefs.showLabels
         page.iconDp = homeIcon()
