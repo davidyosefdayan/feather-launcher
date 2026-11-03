@@ -102,12 +102,6 @@ class HomeScreen(
     /** What's drawn around the page and the pages beside it: gone while the pages slide, back once they've stopped. */
     private val pageRings = mutableListOf<View>()
 
-    /**
-     * Each folder's picture and what it was drawn from; drawn again only when that changes, not at
-     * every return home. Before init, which draws the folders.
-     */
-    private val folderIcons = HashMap<Long, Pair<List<Any?>, Bitmap>>()
-
     init {
         dock.cols = Workspace.DOCK_COLS
         dock.rows = 1
