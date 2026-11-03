@@ -1743,11 +1743,8 @@ class HomeActivity : Activity(), HomeScreen.Host {
         val digit = digitOf(event.keyCode)
         if (drawerOpen && digit != null && !overlays.isShowing) {
             if (!search.isFocused) {
-                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                    // Typing a number in the app list jumps to Smart Search.
-                    if (!searching) openSearch(digit.toString(), fromKeypad = true) else search.append(digit.toString())
-                    keypadQuery = true
-                }
+                // Typing a number in the app list jumps to Smart Search.
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) typeDigit(digit, event.downTime)
                 return true
             }
         }
@@ -1817,7 +1814,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
      * A key the service held back (to see if it was held) and then let through. Arrow keys move
      * the keypad highlight; anything else goes through the usual key handling.
      */
-    fun pressKey(code: Int) {
+    fun pressKey(code: Int, downTime: Long = android.os.SystemClock.uptimeMillis()) {
         val now = android.os.SystemClock.uptimeMillis()
         if (homeScreen.takesKeys) {
             homeScreen.keyMove(KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0))
@@ -1829,8 +1826,9 @@ class HomeActivity : Activity(), HomeScreen.Host {
             homeScreen.moveFocus(direction)
             return
         }
-        dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0))
-        dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, code, 0))
+        // When it was really pressed, so a number lands in search where it was typed ([typeDigit]).
+        dispatchKeyEvent(KeyEvent(downTime, now, KeyEvent.ACTION_DOWN, code, 0))
+        dispatchKeyEvent(KeyEvent(downTime, now, KeyEvent.ACTION_UP, code, 0))
     }
 
     /** A key the service held back that turned out to be held: its built-in hold action, if any. */
@@ -1840,7 +1838,40 @@ class HomeActivity : Activity(), HomeScreen.Host {
     }
 
     /** A quick press of a number on the home screen: search, starting with that number. */
-    fun pressDigit(digit: Int) = openSearch(digit.toString(), fromKeypad = true)
+    fun pressDigit(digit: Int, downTime: Long) = typeDigit(digit, downTime)
+
+    /** When each number in the search text was pressed, for those typed on the keypad ([typeDigit]). */
+    private val keyTimes = ArrayList<Long>()
+
+    /**
+     * A number pressed on the keypad ([downTime] is when) goes into search: opening it, or among
+     * the numbers already there. Numbers come by two ways, straight from the keypad, or from
+     * LauncherService after it waited to see if they were held, and when the phone is busy a
+     * later one can come before an earlier one ("3417727303" for "3477127303"), or one can come
+     * both ways. Each goes where it was pressed, and only once.
+     */
+    private fun typeDigit(digit: Int, downTime: Long) {
+        if (overlays.isShowing) return
+        if (!drawerOpen || !searching) {
+            openSearch(digit.toString(), fromKeypad = true)
+            keyTimes.clear()
+            keyTimes += downTime
+            return
+        }
+        keypadQuery = true
+        val text = search.text
+        // Changed some other way (a number deleted): what's there counts as typed before.
+        if (keyTimes.size != text.length) {
+            keyTimes.clear()
+            repeat(text.length) { keyTimes += Long.MIN_VALUE }
+        }
+        // The same press, the second way it came.
+        if (keyTimes.indices.any { keyTimes[it] == downTime && text[it] == '0' + digit }) return
+        var at = keyTimes.size
+        while (at > 0 && keyTimes[at - 1] > downTime) at--
+        keyTimes.add(at, downTime)
+        text.insert(at, digit.toString())
+    }
 
     /** A held number: what it's set to do, or, when it isn't set, offer to choose an app for it. */
     fun holdDigit(digit: Int) {
@@ -1861,7 +1892,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         val digit = digitOf(keyCode)
         if (!drawerOpen && !overlays.isShowing && digit != null && event.isTracking && !event.isCanceled) {
-            openSearch(digit.toString(), fromKeypad = true)
+            typeDigit(digit, event.downTime)
             return true
         }
         return super.onKeyUp(keyCode, event)
