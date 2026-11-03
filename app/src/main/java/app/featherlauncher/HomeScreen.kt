@@ -110,6 +110,7 @@ class HomeScreen(
             // The widget being resized stays on its page; the frame around it goes too.
             finishResize()
             inside = null
+            collapseNotifications()
         }
         if (workspace.isNew) setUpDefaults()
         bindAll()
@@ -2353,6 +2354,20 @@ class HomeScreen(
         inside = view
         parts.minByOrNull { rectInRoot(it).let { r -> r.top * 10_000 + r.left } }?.requestFocusFromTouch()
         return true
+    }
+
+    /**
+     * Notifications widgets opened up to show one notification go back to their lists: anything
+     * else taking the user's attention closes them. A touch at [x], [y] on the screen leaves the
+     * one it lands on open.
+     */
+    fun collapseNotifications(x: Float = Float.NaN, y: Float = Float.NaN) {
+        val at = IntArray(2)
+        views.values.filterIsInstance<NotificationsWidget>().filter { it.isExpanded }.forEach { w ->
+            w.getLocationOnScreen(at)
+            val touched = x >= at[0] && x < at[0] + w.width && y >= at[1] && y < at[1] + w.height
+            if (!touched) w.collapse()
+        }
     }
 
     /** Back inside a widget: out to the widget itself. Returns false when not inside one. */
