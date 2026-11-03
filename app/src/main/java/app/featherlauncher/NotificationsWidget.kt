@@ -179,6 +179,15 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
     /** Where the keypad goes once the line it was on is cleared. */
     private var refocus: String? = null
     private val changed = { refresh() }
+
+    init {
+        // The lines' highlights reach a little past the card's room for its contents, into its
+        // padding; drawn whole, not cut off at the sides.
+        clipToPadding = false
+        clipChildren = false
+        content.clipChildren = false
+    }
+
     /** Narrow: each line's text goes under its title, and the times are left out. */
     private var narrow = false
     /** Not wide enough for the times beside the words. */
