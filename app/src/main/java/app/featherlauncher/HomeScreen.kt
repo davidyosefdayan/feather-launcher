@@ -111,6 +111,8 @@ class HomeScreen(
         root.addView(pageTarget, FrameLayout.LayoutParams(0, 0, Gravity.TOP or Gravity.START))
         pageRings += pageTarget
         pages.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            // Not while the Pages screen has the pages (see lendPages).
+            if (pages.pageCount == 0) return@addOnLayoutChangeListener
             placePageTarget()
             // The dots sit midway between the last row and the dock.
             dots.aboveDock = pages.page(0).rowGap / 2
@@ -231,6 +233,7 @@ class HomeScreen(
 
     /** Puts every item's view in its cell, creating views as needed and reusing the rest. */
     fun bindAll() {
+        if (lent) return
         while (pages.pageCount < workspace.pageCount) pages.addView(newPage())
         while (pages.pageCount > workspace.pageCount) pages.removeViewAt(pages.pageCount - 1)
         dots.count = workspace.pageCount
@@ -560,11 +563,37 @@ class HomeScreen(
 
     // region Pages
 
+    /** The Pages screen has the pages' grids: nothing is put on them until they're back. */
+    private var lent = false
+
     /**
-     * A hidden page laid out as it would be on the home screen, with views of its own, for its
-     * picture in [PagesScreen]. Nothing on it can be used.
+     * Every page's grid in order, for [PagesScreen] to show: the shown pages' own, and the hidden
+     * ones laid out as they'd be on the home screen. The grids themselves move, so nothing on them
+     * is made again or moved however the pages change; the home screen has none until [returnPages].
      */
-    fun buildPage(items: List<HomeItem>): CellLayout {
+    fun lendPages(): List<CellLayout> {
+        val shown = (0 until pages.pageCount).map { pages.page(it) }
+        pages.removeAllViews()
+        lent = true
+        var next = 0
+        return workspace.allPages().map { if (it.hidden) buildPage(it.items) else shown[next++] }
+    }
+
+    /** Takes back the grids of the pages that are shown now, in their order. */
+    fun returnPages(shown: List<CellLayout>) {
+        lent = false
+        for (page in shown) {
+            (page.parent as? ViewGroup)?.removeView(page)
+            page.scaleX = 1f
+            page.scaleY = 1f
+            page.translationY = 0f
+            pages.addView(page)
+        }
+        pages.snapTo(pages.currentPage, animate = false)
+        bindAll()
+    }
+
+    private fun buildPage(items: List<HomeItem>): CellLayout {
         val page = newPage()
         page.names = prefs.showLabels
         page.iconDp = homeIcon()
@@ -572,7 +601,8 @@ class HomeScreen(
         val newApps = NewApps.get(activity)
         val now = System.currentTimeMillis()
         for (item in items) {
-            val view = createView(item) ?: continue
+            // Kept, so a page shown again has them ready (they go if it stays hidden).
+            val view = views[item.id] ?: createView(item)?.also { views[item.id] = it } ?: continue
             bindItem(item, view, limits, newApps, now)
             page.place(view, item.x, item.y, item.w, item.h)
         }

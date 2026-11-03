@@ -3,7 +3,6 @@ package app.featherlauncher
 import android.animation.ObjectAnimator
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.graphics.Canvas
 import android.graphics.Rect
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -42,8 +41,15 @@ class PagesScreen(
         p = palette()
         val widthDp = activity.resources.displayMetrics.run { widthPixels / density }
         grid = Grid(if (widthDp >= 360) 3 else 2, pageHeight.toFloat() / pageWidth)
-        homeScreen.workspace.allPages().forEach { grid.add(Tile(it.hidden)) }
-        grid.tiles.forEach { fill(it) }
+        val focused = homeScreen.pages.currentPage
+        // The pages themselves, not pictures of them: they stay as they are while they're
+        // shown, hidden or moved here, and go back to the home screen on closing.
+        homeScreen.workspace.allPages().zip(homeScreen.lendPages()).forEach { (page, cells) ->
+            grid.add(Tile(page.hidden).apply {
+                this.cells = cells
+                picture.addView(cells, FrameLayout.LayoutParams(pageWidth, source.height))
+            })
+        }
 
         val insets = overlays.insets
         // Headed and colored as the app list is.
@@ -80,43 +86,26 @@ class PagesScreen(
             addView(header)
             addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
-        // The home screen steps aside; its pages are still drawn here.
-        home.animate().alpha(0f).setDuration(160).withEndAction { home.visibility = View.INVISIBLE }.start()
+        // The home screen steps aside while its pages are here.
+        home.animate().cancel()
+        home.visibility = View.INVISIBLE
+        home.alpha = 0f
         overlays.showScreen(screen) {
-            grid.removeCallbacks(refresh)
-            home.animate().cancel()
-            home.visibility = View.VISIBLE
-            home.animate().alpha(1f).setDuration(180).start()
+            // Once this has faded out, the pages go back and the home screen fades in with them.
+            home.postDelayed({
+                homeScreen.returnPages(grid.tiles.filter { !it.hidden }.map { it.cells })
+                home.visibility = View.VISIBLE
+                home.animate().alpha(1f).setDuration(180).start()
+            }, CLOSE)
         }
-        grid.postDelayed(refresh, REFRESH)
         if (!grid.isInTouchMode) grid.post {
             // With the keypad, start on the page that was showing.
-            grid.tiles.filter { !it.hidden }.getOrNull(homeScreen.pages.currentPage)?.requestFocus()
+            grid.tiles.filter { !it.hidden }.getOrNull(focused)?.requestFocus()
         }
     }
 
-    /** Shown pages are drawn from the home screen, so a widget changing there changes here. */
-    private val refresh = object : Runnable {
-        override fun run() {
-            grid.tiles.forEach { it.picture.getChildAt(0)?.invalidate() }
-            grid.postDelayed(this, REFRESH)
-        }
-    }
-
-    /** The page's picture: drawn from the home screen while it's shown, laid out on its own while it's hidden. */
-    private fun fill(tile: Tile) {
-        tile.picture.removeAllViews()
-        if (tile.hidden) {
-            val items = homeScreen.workspace.allPages()[grid.tiles.indexOf(tile)].items
-            val page = homeScreen.buildPage(items)
-            val source = homeScreen.pages.page(0)
-            tile.picture.addView(page, FrameLayout.LayoutParams(source.width, source.height))
-        } else {
-            tile.picture.addView(Mirror(tile), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        }
-    }
-
-    private val scaleHidden = View.OnLayoutChangeListener { v, left, _, right, _, _, _, _, _ ->
+    /** A page drawn at the size of its picture. */
+    private val scalePage = View.OnLayoutChangeListener { v, left, _, right, _, _, _, _, _ ->
         val page = (v as ViewGroup).getChildAt(0) as? CellLayout ?: return@OnLayoutChangeListener
         val scale = (right - left).toFloat() / page.layoutParams.width.coerceAtLeast(1)
         page.pivotX = 0f
@@ -124,21 +113,6 @@ class PagesScreen(
         page.scaleX = scale
         page.scaleY = scale
         page.translationY = page.roomAbove * scale
-    }
-
-    /** A shown page, drawn small from its place on the home screen. */
-    private inner class Mirror(private val tile: Tile) : View(activity) {
-        override fun onDraw(canvas: Canvas) {
-            val index = grid.tiles.takeWhile { it !== tile }.count { !it.hidden }
-            if (index >= homeScreen.pages.pageCount) return
-            val page = homeScreen.pages.page(index)
-            val scale = width.toFloat() / page.width.coerceAtLeast(1)
-            canvas.save()
-            canvas.scale(scale, scale)
-            canvas.translate(0f, page.roomAbove.toFloat())
-            page.draw(canvas)
-            canvas.restore()
-        }
     }
 
     private fun toggle(tile: Tile) {
@@ -151,8 +125,6 @@ class PagesScreen(
         tile.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
         homeScreen.setPageHidden(grid.tiles.indexOf(tile), !tile.hidden)
         tile.setHidden(!tile.hidden, animate = true)
-        fill(tile)
-        redraw()
     }
 
     private fun move(tile: Tile, to: Int) {
@@ -160,7 +132,6 @@ class PagesScreen(
         if (to == from || to !in grid.tiles.indices) return
         grid.place(tile, to)
         homeScreen.movePage(from, to)
-        redraw()
     }
 
     private fun confirmDelete(tile: Tile) {
@@ -180,7 +151,6 @@ class PagesScreen(
                 if (position < 0) return@pillButton
                 homeScreen.deletePage(position)
                 grid.remove(tile)
-                redraw()
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(Ui.SPACE_L) })
         }
         overlays.showSheet("Delete page?", column)
@@ -199,11 +169,6 @@ class PagesScreen(
         ), r)
     }
 
-    /** The pages changed on the home screen: the shown ones are drawn again from where they are now. */
-    private fun redraw() {
-        grid.post { grid.tiles.forEach { it.picture.getChildAt(0)?.invalidate() } }
-    }
-
     /**
      * One page: its picture, and a switch under it that's on while the page is on the home
      * screen. A hidden page is faded, with a button on its corner to delete it.
@@ -212,10 +177,11 @@ class PagesScreen(
     private inner class Tile(hidden: Boolean) : ViewGroup(activity) {
         var hidden = hidden
             private set
+        lateinit var cells: CellLayout
         val picture = FrameLayout(activity).apply {
             background = Ui.rounded(activity, (p.onWall and 0xFFFFFF) or 0x14000000, Ui.RADIUS_M)
             clipToOutline = true
-            addOnLayoutChangeListener(scaleHidden)
+            addOnLayoutChangeListener(scalePage)
         }
         /** The keypad's ring, just outside the picture. */
         private val ring = View(activity).apply {
@@ -421,7 +387,6 @@ class PagesScreen(
                     val to = tiles.indexOf(tile)
                     if (to != dragFrom) {
                         homeScreen.movePage(dragFrom, to)
-                        redraw()
                     }
                 }
             }
@@ -437,6 +402,7 @@ class PagesScreen(
         /** Room between a page's picture and the keypad's ring around it (dp). */
         private const val RING_GAP = 4
         private const val DELETE = 32
-        private const val REFRESH = 1000L
+        /** How long the screen takes to fade out (see [Overlays.dismissScreen]). */
+        private const val CLOSE = 160L
     }
 }
