@@ -108,33 +108,40 @@ class PagesScreen(
         if (!grid.isInTouchMode) grid.post { grid.tiles.filter { !it.hidden }.getOrNull(focused)?.requestFocus() }
     }
 
-    private lateinit var screen: View
+    private lateinit var screen: ViewGroup
     private var cellsWidth = 0
     private var cellsHeight = 0
 
     /**
-     * Between the home screen and this, together, as the app list comes and goes: the home screen
-     * falls back and fades while this comes forward and fades in (or the other way, closing).
+     * In two halves, as the app list comes: the home screen falls back and fades while the
+     * background comes up over the wallpaper, then what's here fades in, settling back from a
+     * little bigger, so everything moves the same way (the other way, closing). The app list
+     * slides; this zooms.
      */
     private fun transition(opening: Boolean, done: () -> Unit) {
         home.visibility = View.VISIBLE
         home.pivotX = home.width / 2f
         home.pivotY = home.height / 2f
-        screen.pivotX = home.width / 2f
-        screen.pivotY = home.height / 2f
+        val backdrop = screen.background
+        val content = (0 until screen.childCount).map { screen.getChildAt(it) }
         fun apply(t: Float) {
-            screen.alpha = t
-            screen.scaleX = 1.06f - 0.06f * t
-            screen.scaleY = 1.06f - 0.06f * t
-            home.alpha = 1 - t
-            home.scaleX = 1 - 0.08f * t
-            home.scaleY = 1 - 0.08f * t
+            val first = (t / 0.5f).coerceIn(0f, 1f)
+            val second = ((t - 0.5f) / 0.5f).coerceIn(0f, 1f)
+            home.alpha = 1 - first
+            home.scaleX = 1 - 0.08f * first
+            home.scaleY = 1 - 0.08f * first
+            backdrop.alpha = (255 * first).toInt()
+            for (view in content) {
+                view.alpha = second
+                view.scaleX = 1.06f - 0.06f * second
+                view.scaleY = 1.06f - 0.06f * second
+            }
         }
         val from = (animator?.animatedValue as? Float) ?: if (opening) 0f else 1f
         animator?.cancel()
         animator = android.animation.ValueAnimator.ofFloat(from, if (opening) 1f else 0f).apply {
             duration = TRANSITION
-            interpolator = android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f)
+            interpolator = HomeActivity.PANEL_EASING
             addUpdateListener { apply(it.animatedValue as Float) }
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 private var cancelled = false
@@ -478,6 +485,7 @@ class PagesScreen(
         /** Room between a page's picture and the keypad's ring around it (dp). */
         private const val RING_GAP = 4
         private const val DELETE = 32
-        private const val TRANSITION = 340L
+        /** As long as the app list takes to open. */
+        private const val TRANSITION = 380L
     }
 }

@@ -2445,7 +2445,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         private const val REQUEST_MEDIA = 22
         private const val MAX_FITTING_TABS = 9
         private const val TAB_BAR_HEIGHT = 60
-        private val PANEL_EASING = android.view.animation.PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
+        val PANEL_EASING = android.view.animation.PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
         /** How far to drag (dp) for a panel to be fully shown. */
         private const val PANEL_PULL = 160
     }
