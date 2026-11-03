@@ -115,13 +115,17 @@ class LauncherService : AccessibilityService() {
 
         val digit = if (code in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) code - KeyEvent.KEYCODE_0 else null
         if (digit != null) {
+            val downTime = event.downTime
+            // Feather is in front but not ready for keys yet: just as the screen turns on, a number
+            // pressed straight away would be lost.
+            val waking = home == null && current == packageName && HomeActivity.running == null
             // In other apps, a number that isn't set is the app's; that's known without asking Android anything.
-            if (home == null && KeyShortcuts.get(this).digit(digit) == null) return false
+            if (home == null && !waking && KeyShortcuts.get(this).digit(digit) == null) return false
             // On the lock screen, numbers type the PIN.
             if (getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked) return false
-            if (home != null) {
+            if (home != null || waking) {
                 owned += code
-                press(code, onHold = { HomeActivity.running?.holdDigit(digit) }, onPress = { HomeActivity.running?.pressDigit(digit) })
+                press(code, onHold = { whenReady { it.holdDigit(digit) } }, onPress = { whenReady { it.pressDigit(digit, downTime) } })
                 return true
             }
             // In other apps, a number that's set does its thing when held, instead of the phone's
@@ -133,7 +137,7 @@ class LauncherService : AccessibilityService() {
             // In Feather's own search and app list, a quick press still types the number (to
             // search or dial); Feather is in front whenever it's running.
             val feather = HomeActivity.running
-            press(code, onHold = { run(action) }, onPress = { feather?.pressKey(code) })
+            press(code, onHold = { run(action) }, onPress = { feather?.pressKey(code, downTime) })
             return true
         }
         if (!KeyShortcuts.canUse(code)) return false
@@ -183,6 +187,12 @@ class LauncherService : AccessibilityService() {
     }
 
     private val pressActions = HashMap<Int, () -> Unit>()
+
+    /** Runs [act] on the home screen as soon as it's ready for keys (it's waking), for up to a second and a half. */
+    private fun whenReady(tries: Int = 0, act: (HomeActivity) -> Unit) {
+        HomeActivity.running?.let { return act(it) }
+        if (tries < 30) main.postDelayed({ whenReady(tries + 1, act) }, 50)
+    }
 
     /** A key held back for timing became part of a combination: it does nothing more. */
     private fun cancelTiming(code: Int) {
