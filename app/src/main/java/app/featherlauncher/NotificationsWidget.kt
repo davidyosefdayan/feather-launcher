@@ -179,6 +179,14 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
     /** Where the keypad goes once the line it was on is cleared. */
     private var refocus: String? = null
     private val changed = { refresh() }
+    /** While the card is being made again, when the highlight may briefly go elsewhere. */
+    private var rebuilding = false
+    /** The keypad highlight leaving the card closes the open one. */
+    private val focusMoved = android.view.ViewTreeObserver.OnGlobalFocusChangeListener { _, now ->
+        if (!rebuilding && expanded != null && now != null && !isInside(now)) collapse()
+    }
+
+    private fun isInside(view: View): Boolean = generateSequence(view) { it.parent as? View }.any { it === this }
 
     init {
         // The lines' highlights reach a little past the card's room for its contents, into its
@@ -208,15 +216,32 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
 
     override fun onAttachedToWindow() {
         ActiveNotifications.listen(changed)
+        viewTreeObserver.addOnGlobalFocusChangeListener(focusMoved)
         super.onAttachedToWindow()
     }
 
     override fun onDetachedFromWindow() {
         ActiveNotifications.unlisten(changed)
+        viewTreeObserver.removeOnGlobalFocusChangeListener(focusMoved)
         super.onDetachedFromWindow()
     }
 
+    /** Another app, a system dialog, or the screen going off: the open one closes. */
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        if (!hasWindowFocus) collapse()
+    }
+
     override fun refresh() {
+        rebuilding = true
+        try {
+            rebuild()
+        } finally {
+            rebuilding = false
+        }
+    }
+
+    private fun rebuild() {
         if (!NotificationService.isEnabled(context)) {
             expanded = null
             return prompt(R.drawable.ic_notification, "Notifications", "Allow notification access to see your notifications") {
@@ -260,7 +285,10 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
         onRebuilt?.invoke()
     }
 
-    /** Back on the keypad, or the close button: the open one closes again. Returns false when none is open. */
+    /** Whether one is open to show its buttons, rather than the list. */
+    val isExpanded get() = expanded != null
+
+    /** Back, or the close button: the open one closes again. Returns false when none is open. */
     fun collapse(): Boolean {
         val key = expanded ?: return false
         val keypad = findFocus()?.isInTouchMode == false

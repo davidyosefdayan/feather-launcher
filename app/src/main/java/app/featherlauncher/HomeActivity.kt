@@ -369,6 +369,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         if (NotificationBadges.onChange === badgesChanged) NotificationBadges.onChange = null
         widgets.stopListening()
         hideDrawer(animate = false)
+        homeScreen.collapseNotifications()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -376,6 +377,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         // Home pressed while already home.
         overlays.dismissScreen() || overlays.dismiss()
         homeScreen.finishResize()
+        homeScreen.collapseNotifications()
         if (openFromKey(intent.getStringExtra(EXTRA_OPEN))) return
         if (!drawerOpen) homeScreen.pages.snapTo(0)
         hideDrawer()
@@ -401,6 +403,8 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         // Touching the screen while moving something with the keypad puts it down where it is.
+        // A touch anywhere but on an opened-up notification closes it.
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) homeScreen.collapseNotifications(ev.rawX, ev.rawY)
         if (ev.actionMasked == MotionEvent.ACTION_DOWN) keyMover?.let { mover ->
             keyMover = null
             mover.done()
@@ -680,6 +684,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         drawer.visibility = View.VISIBLE
         if (!drawerOpen && panelProgress == 0f) applyPanelProgress(0f)
         drawerOpen = true
+        homeScreen.collapseNotifications()
         settlePanel(open = true)
     }
 
