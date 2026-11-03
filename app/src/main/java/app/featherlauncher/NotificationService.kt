@@ -47,6 +47,7 @@ class NotificationService : NotificationListenerService() {
         media = null
         showing.clear()
         NotificationBadges.clear()
+        ActiveNotifications.clear()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
@@ -63,7 +64,10 @@ class NotificationService : NotificationListenerService() {
     // Someone turned an app's notification dots on or off.
     override fun onNotificationRankingUpdate(rankingMap: RankingMap) = recount()
 
-    private fun recount() = NotificationBadges.update(this, showing.values)
+    private fun recount() {
+        NotificationBadges.update(this, showing.values)
+        ActiveNotifications.update(this, showing.values)
+    }
 
     private fun filter(sbn: StatusBarNotification) {
         val n = sbn.notification
@@ -120,6 +124,9 @@ class NotificationService : NotificationListenerService() {
             val service = running ?: return
             runCatching { service.activeNotifications }.getOrNull()?.forEach(service::filter)
         }
+
+        /** Clears the notification with [key], as swiping it away in the shade does. False when it can't. */
+        fun cancel(key: String): Boolean = running?.let { runCatching { it.cancelNotification(key) }.isSuccess } == true
 
         fun isEnabled(context: Context): Boolean {
             val me = ComponentName(context, NotificationService::class.java)
