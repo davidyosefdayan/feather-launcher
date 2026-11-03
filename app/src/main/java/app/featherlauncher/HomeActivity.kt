@@ -376,7 +376,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         // Home pressed while already home.
-        overlays.dismiss()
+        overlays.dismissScreen() || overlays.dismiss()
         homeScreen.finishResize()
         if (openFromKey(intent.getStringExtra(EXTRA_OPEN))) return
         if (!drawerOpen) homeScreen.pages.snapTo(0)
@@ -1757,6 +1757,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
             keyMover != null -> keyMover?.undo?.invoke().also { keyMover = null }
             PinPad.active?.takeIf { overlays.isShowing }?.back() == true -> Unit
             overlays.dismiss() -> Unit
+            overlays.dismissScreen() -> Unit
             homeScreen.finishResize() -> Unit
             homeScreen.leaveWidget() -> Unit
             drawerOpen && showingHidden -> {
@@ -2179,6 +2180,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     override fun homeMenuItems() = listOf(
         MenuItem("Add widget", R.drawable.ic_widgets) { widgets.pick() },
+        MenuItem("Pages", R.drawable.ic_grid) { PagesScreen(this, home, homeScreen, overlays) { palette }.open() },
         MenuItem("Wallpaper", R.drawable.ic_wallpaper) { startActivity(Intent(this, WallpaperActivity::class.java)) },
         MenuItem("Settings", R.drawable.ic_settings) { startActivity(Intent(this, SettingsActivity::class.java)) },
     )
@@ -2443,7 +2445,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         private const val REQUEST_MEDIA = 22
         private const val MAX_FITTING_TABS = 9
         private const val TAB_BAR_HEIGHT = 60
-        private val PANEL_EASING = android.view.animation.PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
+        val PANEL_EASING = android.view.animation.PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
         /** How far to drag (dp) for a panel to be fully shown. */
         private const val PANEL_PULL = 160
     }

@@ -34,8 +34,15 @@ class FeatherSwitch(context: Context, private val p: Palette, initial: Boolean) 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val colors = ArgbEvaluator()
     private val check = context.getDrawable(R.drawable.ic_check)!!.mutate()
+    /**
+     * On the app list's wallpaper-colored background instead of a sheet: in its text color, as
+     * everything else there is.
+     */
+    var onWall = false
+        set(value) { field = value; invalidate() }
+
     /** Material's outline: a mid tone that shows on light and dark. */
-    private val outline = (p.text and 0xFFFFFF) or 0x8C000000.toInt()
+    private val outline get() = ((if (onWall) p.onWall else p.text) and 0xFFFFFF) or 0x8C000000.toInt()
 
     init {
         isDuplicateParentStateEnabled = true
@@ -75,7 +82,10 @@ class FeatherSwitch(context: Context, private val p: Palette, initial: Boolean) 
 
         // The track: outlined when off, filled with the accent when on.
         paint.style = Paint.Style.FILL
-        paint.color = colors.evaluate(progress, p.surfaceHigh, p.accent) as Int
+        val off = if (onWall) (p.onWall and 0xFFFFFF) or 0x1F000000 else p.surfaceHigh
+        val on = if (onWall) p.onWall else p.accent
+        val thumb = if (onWall) p.drawer or 0xFF000000.toInt() else p.onAccent
+        paint.color = colors.evaluate(progress, off, on) as Int
         canvas.drawRoundRect(left, top, left + w, top + h, r, r, paint)
         if (progress < 1f) {
             val stroke = 2 * d
@@ -91,12 +101,12 @@ class FeatherSwitch(context: Context, private val p: Palette, initial: Boolean) 
         val cx = left + r + (w - 2 * r) * progress
         val cy = top + r
         paint.style = Paint.Style.FILL
-        paint.color = colors.evaluate(progress, outline, p.onAccent) as Int
+        paint.color = colors.evaluate(progress, outline, thumb) as Int
         canvas.drawCircle(cx, cy, size / 2, paint)
 
         if (progress > 0.5f) {
             val icon = (16 * d).toInt()
-            check.setTint(p.accent)
+            check.setTint(on)
             check.alpha = ((progress - 0.5f) * 2 * 255).toInt()
             check.setBounds((cx - icon / 2).toInt(), (cy - icon / 2).toInt(), (cx + icon / 2).toInt(), (cy + icon / 2).toInt())
             check.draw(canvas)
