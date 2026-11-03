@@ -95,6 +95,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { onBack() }
 
         prefs = Prefs(this)
+        shownNight = resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
         palette = currentPalette()
         Workspace.fitRows(this)
         repo = Launcher.repo(this)
@@ -137,12 +138,30 @@ class HomeActivity : Activity(), HomeScreen.Host {
         updateResults()
         applyTheme()
 
-        WallpaperManager.getInstance(this).addOnColorsChangedListener({ _, _ ->
-            if (prefs.colorStyle == ColorStyle.WALLPAPER) {
-                palette = currentPalette()
+        Palette.wallpaperChanged += wallpaperChanged
+    }
+
+    /**
+     * New wallpaper colors, if they make new colors here; while the home screen is hidden that's
+     * left to [onResume], so a wallpaper changing in the background doesn't make it all again.
+     */
+    private val wallpaperChanged = {
+        if (lifecycleStarted && prefs.colorStyle == ColorStyle.WALLPAPER) {
+            val next = currentPalette()
+            if (!next.sameAs(palette)) {
+                palette = next
                 applyTheme()
             }
-        }, Handler(mainLooper))
+        }
+    }
+    private var lifecycleStarted = false
+
+    override fun onDestroy() {
+        Palette.wallpaperChanged -= wallpaperChanged
+        contacts.close()
+        smartSearch.close()
+        if (::adapter.isInitialized) adapter.close()
+        super.onDestroy()
     }
 
     private fun currentPalette() = Palette.from(this, prefs.colorStyle, prefs.themeMode, prefs.accentColor)
@@ -151,9 +170,17 @@ class HomeActivity : Activity(), HomeScreen.Host {
         super.onConfigurationChanged(newConfig)
         // Light/dark mode switched while the launcher was running.
         palette = currentPalette()
+        val night = newConfig.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+        if (night != shownNight) {
+            shownNight = night
+            homeScreen.remakeOtherWidgets()
+        }
         applyTheme()
         applyDarkMode()
     }
+
+    /** The phone's light or dark mode that other apps' widgets were last made in. */
+    private var shownNight = 0
 
     /** Icons, the wallpaper dimming and the wallpaper pair, for the current light or dark mode. */
     /** The screen went off; the darkening comes back after the unlock (see [applyDarkMode]). */
@@ -212,6 +239,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     override fun onStart() {
         super.onStart()
+        lifecycleStarted = true
         widgets.startListening()
     }
 
@@ -269,20 +297,22 @@ class HomeActivity : Activity(), HomeScreen.Host {
     override fun onResume() {
         super.onResume()
         running = this
+        webSearch = null
         if (::smartSearch.isInitialized) preloadSearch()
         // Settings may have changed on the settings page.
         prefs.reload()
         WeatherWallpaper.refresh(this)
         Shuffle.next(this)
         val next = currentPalette()
-        // The wallpaper may have changed too, which changes the app list's colors.
-        if (next.accent != palette.accent || next.dark != palette.dark || next.drawer != palette.drawer) {
+        // The wallpaper may have changed too (while the home screen was hidden), which changes its colors.
+        if (!next.sameAs(palette)) {
             palette = next
             applyTheme()
         }
         repo.setShape(prefs.iconShape)
         applyDarkMode()
         homeScreen.bindAll()
+        homeScreen.refreshWidgets()
         focusDockStart()
         updateResults()
         watchLimits()
@@ -328,6 +358,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     override fun onStop() {
         super.onStop()
+        lifecycleStarted = false
         // The screen went off (the phone is locking): see applyDarkMode.
         if (!getSystemService(android.os.PowerManager::class.java).isInteractive) {
             dimAfterUnlock = true
@@ -343,7 +374,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         // Home pressed while already home.
-        overlays.dismiss()
+        overlays.dismissScreen() || overlays.dismiss()
         homeScreen.finishResize()
         if (openFromKey(intent.getStringExtra(EXTRA_OPEN))) return
         if (!drawerOpen) homeScreen.pages.snapTo(0)
@@ -488,6 +519,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         // Contacts and shortcuts are loaded ahead of time (on start and on return), so search opens
         // complete in one go; later changes only redraw if something actually changed.
         contacts.onLoaded = { if (searching) updateResults() }
+        contacts.onReloaded = adapter::forgetPhotos
         preloadSearch()
 
         // Closing follows the finger too: down on the app list, up on Smart Search.
@@ -559,7 +591,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
             this.search.setText("")
             if (!search && category == null) category = visibleCategories().firstOrNull()?.id
             setPanelLook()
-            updateResults()
+            updateResults(force = true)
             panelAnimator?.cancel()
             drawer.animate().cancel()
             drawer.visibility = View.VISIBLE
@@ -695,6 +727,9 @@ class HomeActivity : Activity(), HomeScreen.Host {
         parkFocus()
     }
 
+    /** The hidden apps, in the order they were arranged on their page. */
+    private fun hiddenApps() = categories.sorted(Categories.HIDDEN, repo.apps.filter { it.key in prefs.hidden })
+
     private fun visibleCategories(): List<Categories.Item> {
         val used = repo.apps.filter { it.key !in prefs.hidden }.map { categories.of(it) }.toSet()
         // Categories you made always show; automatic ones only when they have apps.
@@ -763,8 +798,11 @@ class HomeActivity : Activity(), HomeScreen.Host {
     /** What the list was last showing; a refresh of the same thing keeps the scroll and highlight. */
     private var shownKey = ""
 
-    private fun updateResults(keepFocus: Boolean = true) {
+    private fun updateResults(keepFocus: Boolean = true, force: Boolean = false) {
         if (!::adapter.isInitialized) return
+        // Closed, there's nothing to show them in: they're made as the panel opens (every way of
+        // opening it asks), not each time the home screen shows or a notification comes.
+        if (drawer.visibility != View.VISIBLE && !force) return
         val key = "$searching|$showingHidden|$category|$chipCategory|${search.text}|${prefs.drawerCategories}"
         // Results arrive in stages (contacts, shortcuts, files); each refresh rebuilds the rows,
         // so the highlighted item is found again afterwards instead of being lost.
@@ -797,7 +835,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         if (showingHidden) {
             // Its own page, like a category, but no tab is selected.
             title.text = "Hidden apps"
-            val apps = repo.apps.filter { it.key in prefs.hidden }
+            val apps = hiddenApps()
             if (apps.isEmpty()) rows += DrawerAdapter.Row.Title("No hidden apps. Hold an app in the app list and choose Hide from app list.")
             addApps(rows, apps)
             tabsScroll.visibility = if (prefs.drawerCategories) View.VISIBLE else View.GONE
@@ -827,6 +865,10 @@ class HomeActivity : Activity(), HomeScreen.Host {
         adapter.set(rows, null)
     }
 
+    /** What the tabs and chips were last made for ([renderTabs], [renderChips]). */
+    private var tabsShown: Any? = null
+    private var chipsShown: Any? = null
+
     /** In the All apps view, the category picked from the chips; null shows every app. */
     private var chipCategory: String? = null
     private val chipsScroll by lazy {
@@ -844,8 +886,12 @@ class HomeActivity : Activity(), HomeScreen.Host {
     /** "All" and then every category, as pills; the chosen one is filled. */
     private fun renderChips(shown: List<Categories.Item>) {
         val chips = findViewById<LinearLayout>(R.id.chips)
-        chips.removeAllViews()
         val options = listOf<Categories.Item?>(null) + shown
+        // The same chips are left as they are.
+        val key = listOf(shown.map { listOf(it.id, it.name, it.iconRes, it.filledIconRes) }, chipCategory, palette)
+        if (key == chipsShown && chips.childCount == options.size) return
+        chipsShown = key
+        chips.removeAllViews()
         options.forEach { c ->
             val selected = c?.id == chipCategory
             val fg = if (selected) palette.drawer or 0xFF000000.toInt() else palette.onWall
@@ -880,6 +926,10 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     /** A search result with its standing for what's typed (see [SearchHistory.Ranker]). */
     private class Hit<T>(val item: T, val id: String, val points: Double)
+
+    /** Whether something can search the web; asked once per return to the home screen, not per letter. */
+    private var webSearch: Boolean? = null
+    private fun canSearchWeb(web: Intent) = webSearch ?: (packageManager.resolveActivity(web, 0) != null).also { webSearch = it }
 
     /**
      * Smart Search: a number to call, contacts, apps, app shortcuts, phone settings and files, each
@@ -930,8 +980,9 @@ class HomeActivity : Activity(), HomeScreen.Host {
         }.sortedByDescending { it.points }
         val appHits = if (!shows(SearchSection.APPS)) emptyList()
         else if (raw.isEmpty()) {
+            // Each app's count read once, not again for every comparison.
             repo.apps.filter { it.key !in prefs.hidden }
-                .sortedByDescending { prefs.launchCount(it.key) }
+                .map { it to prefs.launchCount(it.key) }.sortedByDescending { it.second }.map { it.first }
                 .map { Hit(it, "app:${it.key}", 0.0) }
         } else {
             // Hidden apps are only on the hidden apps page, never in search.
@@ -1018,7 +1069,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
         // Last, the same words searched on the web, if the phone has something to search it with.
         val web = Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, raw)
-        if (raw.isNotEmpty() && shows(SearchSection.WEB) && packageManager.resolveActivity(web, 0) != null) {
+        if (raw.isNotEmpty() && shows(SearchSection.WEB) && canSearchWeb(web)) {
             title(SearchSection.WEB.title)
             rows += DrawerAdapter.Row.Result(Found(raw, "Search the web", "web", iconRes = R.drawable.ic_search) { startSafely(web) })
         }
@@ -1047,13 +1098,21 @@ class HomeActivity : Activity(), HomeScreen.Host {
     /** The category icons along the bottom; long-press one to edit it. */
     private fun renderTabs(shown: List<Categories.Item>) {
         val tabs = findViewById<LinearLayout>(R.id.tabs)
+        // Categories holding an app that's new and not opened yet get a dot, like the app itself.
+        val withNew = repo.apps.filter { newApps.isNew(it) && it.key !in prefs.hidden }.map { categories.of(it) }.toSet()
+        // Opening the app list asks every time; the same tabs are left as they are (a tab let go
+        // of where it was picked up goes back into line).
+        val key = listOf(shown.map { listOf(it.id, it.name, it.iconRes, it.filledIconRes) }, category, showingHidden, withNew, palette)
+        if (key == tabsShown && tabs.childCount == shown.size) {
+            for (i in 0 until tabs.childCount) tabs.getChildAt(i).translationX = 0f
+            return
+        }
+        tabsShown = key
         // Same proportions as the dock: its corner is the same share of its height.
         tabs.background = Ui.rounded(this, palette.glass, Ui.RADIUS_BAR * TAB_BAR_HEIGHT / Ui.DOCK_HEIGHT, palette.hairline)
         tabs.removeAllViews()
         // Tabs share the bar's width; with more than fit, they keep a minimum size and the bar scrolls.
         val fits = shown.size <= MAX_FITTING_TABS
-        // Categories holding an app that's new and not opened yet get a dot, like the app itself.
-        val withNew = repo.apps.filter { newApps.isNew(it) && it.key !in prefs.hidden }.map { categories.of(it) }.toSet()
         shown.forEach { c ->
             val selected = c.id == category && !showingHidden
             tabs.addView(FrameLayout(this).apply {
@@ -1233,7 +1292,8 @@ class HomeActivity : Activity(), HomeScreen.Host {
             adapter.notifyDataSetChanged()
             // Slots are measured once the list has redrawn with the dragged tile left empty.
             list.post { if (active && order == null) captureSlots() }
-            showZone()
+            // Hidden apps never go on the home screen.
+            if (app.key !in prefs.hidden) showZone()
         }
 
         private fun move(x: Float, y: Float) {
@@ -1259,12 +1319,12 @@ class HomeActivity : Activity(), HomeScreen.Host {
             if (overTab != hoverTab) {
                 hoverTab = overTab
                 root.removeCallbacks(switchTab)
-                if (overTab != null && overTab != category) root.postDelayed(switchTab, 350)
+                if (overTab != null && (overTab != category || showingHidden)) root.postDelayed(switchTab, 350)
             }
             if (overTab != null) return
 
             // Over the grid: make room where the finger is.
-            if (searching || !prefs.drawerCategories) return
+            if (searching || !(prefs.drawerCategories || showingHidden)) return
             reorderAt(x, y)
         }
 
@@ -1284,6 +1344,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
             val apps = currentApps()
             views = tileViews()
             home = views.mapValues { (_, v) -> rectOf(v) }
+            unclipRows(true)
             val keys = apps.map { it.key }
             // Only apps on screen can be moved among; the order keeps the rest as they were.
             slots = keys.mapNotNull { home[it] }
@@ -1298,6 +1359,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
             // already in their current slots, so what's seen keeps up with the order.
             if (views.values.any { !it.isAttachedToWindow }) {
                 views = tileViews()
+                unclipRows(true)
                 current.forEachIndexed { i, key ->
                     val view = views[key] ?: return@forEachIndexed
                     val start = home[key] ?: return@forEachIndexed
@@ -1306,14 +1368,16 @@ class HomeActivity : Activity(), HomeScreen.Host {
                     view.translationY = (slot.top - start.top).toFloat()
                 }
             }
-            // Well inside a slot (its middle 60%), so the edge between two never flips back and forth.
-            val target = slots.indexOfFirst { r ->
-                val dx = r.width() * 0.2f
-                val dy = r.height() * 0.2f
-                x > r.left + dx && x < r.right - dx && y > r.top + dy && y < r.bottom - dy
-            }
+            // The slot nearest the finger, so it follows anywhere on the page; anywhere after the last
+            // app, it goes last. It moves only once that slot is clearly nearer than the one it's in, so
+            // the edge between two never flips back and forth.
+            fun distance(r: android.graphics.Rect) = kotlin.math.hypot(x - r.exactCenterX(), y - r.exactCenterY())
             val from = current.indexOf(app.key)
-            if (target < 0 || target == from) return
+            val last = slots.lastOrNull() ?: return
+            val pastEnd = y > last.bottom || (y > last.top && x > last.right)
+            val target = if (pastEnd) slots.lastIndex else slots.indices.minBy { distance(slots[it]) }
+            if (target == from || from !in slots.indices) return
+            if (!pastEnd && distance(slots[target]) > distance(slots[from]) - slots[from].width() * 0.15f) return
             current.add(target, current.removeAt(from))
             current.forEachIndexed { i, key ->
                 val view = views[key] ?: return@forEachIndexed
@@ -1327,7 +1391,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         /** Saves the order made while dragging, putting apps not on screen back where they were. */
         private fun commitOrder() {
             val made = order ?: return
-            val id = category ?: return
+            val id = if (showingHidden) Categories.HIDDEN else category ?: return
             val all = currentApps().map { it.key }
             val onScreen = made.toSet()
             val iterator = made.iterator()
@@ -1336,6 +1400,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
         private fun resetSlots() {
             views.values.forEach { it.animate().cancel(); it.translationX = 0f; it.translationY = 0f }
+            unclipRows(false)
             order = null
             slots = emptyList()
             views = emptyMap()
@@ -1363,6 +1428,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         }
 
         private fun currentApps(): List<AppEntry> {
+            if (showingHidden) return hiddenApps()
             val id = category ?: return emptyList()
             return categories.sorted(id, repo.apps.filter { it.key !in prefs.hidden && categories.of(it) == id })
         }
@@ -1371,6 +1437,11 @@ class HomeActivity : Activity(), HomeScreen.Host {
             val app = entry ?: return
             val id = hoverTab ?: return
             categories.assign(app, id)
+            // From the hidden apps page, it's back in the app list.
+            if (showingHidden) {
+                prefs.setHidden(app.key, false)
+                showingHidden = false
+            }
             // Arrives at the end of its new category.
             categories.setOrder(id, currentAppsIn(id).map { it.key }.filter { it != app.key } + app.key)
             category = id
@@ -1425,6 +1496,12 @@ class HomeActivity : Activity(), HomeScreen.Host {
         private fun overTop(y: Float) = zone != null && y < overlays.insets.top + dp(28)
     }
     private var lastTouchY = 0f
+
+    /** Apps moving up or down a row pass outside their own row; with [on], nothing cuts them off on the way. */
+    private fun unclipRows(on: Boolean) {
+        list.clipChildren = !on
+        for (i in 0 until list.childCount) (list.getChildAt(i) as? ViewGroup)?.clipChildren = !on
+    }
 
     /** Re-renders the category page without jumping back to the top. */
     private fun updateAppListKeepingScroll() {
@@ -1498,22 +1575,17 @@ class HomeActivity : Activity(), HomeScreen.Host {
             updateResults()
         }
         val pin = prefs.hiddenPin
-        if (pin != null) PinPad.ask(this, palette, overlays, pin, show) else show()
+        if (pin != null) PinPad.ask(this, palette, overlays, pin, "To open hidden apps", show) else show()
     }
 
-    /** Number keys, Back-delete and OK go to the PIN pad while it's open. */
+    /** Number keys and Delete go to the PIN pad while it's open (Back goes through [onBack]). */
     private fun pinKey(event: KeyEvent): Boolean {
         val pad = PinPad.active ?: return false
         if (!overlays.isShowing) return false
         val digit = digitOf(event.keyCode)
-        val handled = digit != null || event.keyCode == KeyEvent.KEYCODE_DEL ||
-            event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER
-        if (handled && event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-            when {
-                digit != null -> pad.type('0' + digit)
-                event.keyCode == KeyEvent.KEYCODE_DEL -> pad.delete()
-                else -> pad.confirm()
-            }
+        val handled = digit != null || event.keyCode == KeyEvent.KEYCODE_DEL
+        if (handled && event.action == KeyEvent.ACTION_DOWN) {
+            if (digit != null) { if (event.repeatCount == 0) pad.type('0' + digit) } else pad.delete()
         }
         return handled
     }
@@ -1645,11 +1717,8 @@ class HomeActivity : Activity(), HomeScreen.Host {
         val digit = digitOf(event.keyCode)
         if (drawerOpen && digit != null && !overlays.isShowing) {
             if (!search.isFocused) {
-                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                    // Typing a number in the app list jumps to Smart Search.
-                    if (!searching) openSearch(digit.toString(), fromKeypad = true) else search.append(digit.toString())
-                    keypadQuery = true
-                }
+                // Typing a number in the app list jumps to Smart Search.
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) typeDigit(digit, event.downTime)
                 return true
             }
         }
@@ -1660,7 +1729,9 @@ class HomeActivity : Activity(), HomeScreen.Host {
         when {
             homeScreen.isKeyMoving -> homeScreen.cancelKeyMove()
             keyMover != null -> keyMover?.undo?.invoke().also { keyMover = null }
+            PinPad.active?.takeIf { overlays.isShowing }?.back() == true -> Unit
             overlays.dismiss() -> Unit
+            overlays.dismissScreen() -> Unit
             homeScreen.finishResize() -> Unit
             homeScreen.leaveWidget() -> Unit
             drawerOpen && showingHidden -> {
@@ -1718,7 +1789,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
      * A key the service held back (to see if it was held) and then let through. Arrow keys move
      * the keypad highlight; anything else goes through the usual key handling.
      */
-    fun pressKey(code: Int) {
+    fun pressKey(code: Int, downTime: Long = android.os.SystemClock.uptimeMillis()) {
         val now = android.os.SystemClock.uptimeMillis()
         if (homeScreen.takesKeys) {
             homeScreen.keyMove(KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0))
@@ -1730,8 +1801,9 @@ class HomeActivity : Activity(), HomeScreen.Host {
             homeScreen.moveFocus(direction)
             return
         }
-        dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0))
-        dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, code, 0))
+        // When it was really pressed, so a number lands in search where it was typed ([typeDigit]).
+        dispatchKeyEvent(KeyEvent(downTime, now, KeyEvent.ACTION_DOWN, code, 0))
+        dispatchKeyEvent(KeyEvent(downTime, now, KeyEvent.ACTION_UP, code, 0))
     }
 
     /** A key the service held back that turned out to be held: its built-in hold action, if any. */
@@ -1741,7 +1813,40 @@ class HomeActivity : Activity(), HomeScreen.Host {
     }
 
     /** A quick press of a number on the home screen: search, starting with that number. */
-    fun pressDigit(digit: Int) = openSearch(digit.toString(), fromKeypad = true)
+    fun pressDigit(digit: Int, downTime: Long) = typeDigit(digit, downTime)
+
+    /** When each number in the search text was pressed, for those typed on the keypad ([typeDigit]). */
+    private val keyTimes = ArrayList<Long>()
+
+    /**
+     * A number pressed on the keypad ([downTime] is when) goes into search: opening it, or among
+     * the numbers already there. Numbers come by two ways, straight from the keypad, or from
+     * LauncherService after it waited to see if they were held, and when the phone is busy a
+     * later one can come before an earlier one ("3417727303" for "3477127303"), or one can come
+     * both ways. Each goes where it was pressed, and only once.
+     */
+    private fun typeDigit(digit: Int, downTime: Long) {
+        if (overlays.isShowing) return
+        if (!drawerOpen || !searching) {
+            openSearch(digit.toString(), fromKeypad = true)
+            keyTimes.clear()
+            keyTimes += downTime
+            return
+        }
+        keypadQuery = true
+        val text = search.text
+        // Changed some other way (a number deleted): what's there counts as typed before.
+        if (keyTimes.size != text.length) {
+            keyTimes.clear()
+            repeat(text.length) { keyTimes += Long.MIN_VALUE }
+        }
+        // The same press, the second way it came.
+        if (keyTimes.indices.any { keyTimes[it] == downTime && text[it] == '0' + digit }) return
+        var at = keyTimes.size
+        while (at > 0 && keyTimes[at - 1] > downTime) at--
+        keyTimes.add(at, downTime)
+        text.insert(at, digit.toString())
+    }
 
     /** A held number: its shortcut, or, when it has none, the shortcut editor to set one. */
     fun holdDigit(digit: Int) {
@@ -1759,7 +1864,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         val digit = digitOf(keyCode)
         if (!drawerOpen && !overlays.isShowing && digit != null && event.isTracking && !event.isCanceled) {
-            openSearch(digit.toString(), fromKeypad = true)
+            typeDigit(digit, event.downTime)
             return true
         }
         return super.onKeyUp(keyCode, event)
@@ -2046,6 +2151,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
 
     override fun homeMenuItems() = listOf(
         MenuItem("Add widget", R.drawable.ic_widgets) { widgets.pick() },
+        MenuItem("Pages", R.drawable.ic_grid) { PagesScreen(this, home, homeScreen, overlays) { palette }.open() },
         MenuItem("Wallpaper", R.drawable.ic_wallpaper) { startActivity(Intent(this, WallpaperActivity::class.java)) },
         MenuItem("Settings", R.drawable.ic_settings) { startActivity(Intent(this, SettingsActivity::class.java)) },
     )
@@ -2056,20 +2162,22 @@ class HomeActivity : Activity(), HomeScreen.Host {
             entry.label,
             listOf(
                 shortcuts.menuItems(entry),
-                listOf(
+                // Hidden apps are on their own page instead of in a category, and never on the home screen.
+                listOfNotNull(
                     MenuItem("Add to home", R.drawable.ic_home) {
                         hideDrawer()
                         homeScreen.addApp(entry)
-                    },
-                    MenuItem("Category: ${categories.find(categories.of(entry))?.name ?: ""}", R.drawable.ic_widgets) { categorySheet(entry) },
-                ) + listOfNotNull(
-                    // Apps keep an order you choose within their category.
+                    }.takeIf { !hidden },
+                    MenuItem("Category: ${categories.find(categories.of(entry))?.name ?: ""}", R.drawable.ic_widgets) { categorySheet(entry) }
+                        .takeIf { !hidden },
+                    // Apps keep an order you choose on their page.
                     MenuItem("Move", R.drawable.ic_move) { moveAppWithKeys(entry) }
-                        .takeIf { !searching && !showingHidden && prefs.drawerCategories && category == categories.of(entry) },
-                ) + listOf(
+                        .takeIf { !searching && (showingHidden || prefs.drawerCategories && category == categories.of(entry)) },
                     MenuItem(if (hidden) "Show in app list" else "Hide from app list",
                         if (hidden) R.drawable.ic_visibility else R.drawable.ic_visibility_off) {
                         prefs.setHidden(entry.key, !hidden)
+                        // Hiding it takes it off the home screen too.
+                        if (!hidden) homeScreen.onAppsChanged()
                         updateResults()
                     },
                     MenuItem("Uninstall", R.drawable.ic_delete, danger = true) {
@@ -2149,8 +2257,9 @@ class HomeActivity : Activity(), HomeScreen.Host {
      * stays on it), and the order is saved on OK.
      */
     private fun moveAppWithKeys(entry: AppEntry) {
-        val id = category ?: return
-        val apps = categories.sorted(id, repo.apps.filter { it.key !in prefs.hidden && categories.of(it) == id }).map { it.key }
+        val id = if (showingHidden) Categories.HIDDEN else category ?: return
+        val apps = (if (showingHidden) hiddenApps()
+        else categories.sorted(id, repo.apps.filter { it.key !in prefs.hidden && categories.of(it) == id })).map { it.key }
         val across = if (prefs.drawerGrid) DrawerAdapter.COLS else 1
         // Every app tile on screen, and where each sits now: the slots they move between.
         val tiles = HashMap<String, View>()
@@ -2165,11 +2274,8 @@ class HomeActivity : Activity(), HomeScreen.Host {
         val slots = order.map { home.getValue(it) }
         val moving = tiles[entry.key] ?: return
         moving.requestFocusFromTouch()
-        // Apps moving up or down a row pass outside their own row; nothing cuts them off on the way.
-        val rows = (0 until list.childCount).mapNotNull { list.getChildAt(it) as? ViewGroup }
         fun unclip(on: Boolean) {
-            list.clipChildren = !on
-            rows.forEach { it.clipChildren = !on }
+            unclipRows(on)
             // The one moving is drawn over the others.
             moving.translationZ = if (on) dp(4).toFloat() else 0f
             (moving.parent as? View)?.translationZ = if (on) 1f else 0f
@@ -2310,7 +2416,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         private const val REQUEST_MEDIA = 22
         private const val MAX_FITTING_TABS = 9
         private const val TAB_BAR_HEIGHT = 60
-        private val PANEL_EASING = android.view.animation.PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
+        val PANEL_EASING = android.view.animation.PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
         /** How far to drag (dp) for a panel to be fully shown. */
         private const val PANEL_PULL = 160
     }

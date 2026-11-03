@@ -300,7 +300,8 @@ object Components {
             orientation = LinearLayout.VERTICAL
             setPadding(0, 0, 0, dp(ctx, Ui.SPACE_M))
         }
-        options.forEachIndexed { i, (label, preview) ->
+        fun addRow(i: Int) {
+            val (label, preview) = options[i]
             val box = checkBox(ctx, p, i in checked)
             column.addView(LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -327,6 +328,17 @@ object Components {
                 }
             })
         }
+        // A long list (every app) opens with the rows that show, and the rest follow a few at a
+        // time just after, rather than all being made before the sheet can open.
+        options.indices.take(ROWS_FIRST).forEach(::addRow)
+        fun addMore(from: Int) {
+            if (from >= options.size) return
+            column.post {
+                (from until minOf(from + ROWS_FIRST, options.size)).forEach(::addRow)
+                addMore(from + ROWS_FIRST)
+            }
+        }
+        addMore(ROWS_FIRST)
         val scroll = android.widget.ScrollView(ctx).apply {
             isVerticalScrollBarEnabled = false
             addView(column)
@@ -505,4 +517,6 @@ object Components {
     /** Gap between a group's edge and a row's highlight. */
     private const val ROW_INSET = 4
     const val ROW_HEIGHT = 54
+    /** How many rows of a long checklist are made before it opens, and how many at a time after. */
+    private const val ROWS_FIRST = 20
 }

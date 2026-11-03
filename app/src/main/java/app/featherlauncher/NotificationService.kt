@@ -14,8 +14,19 @@ import android.service.notification.StatusBarNotification
 class NotificationService : NotificationListenerService() {
     private var media: MediaGuard? = null
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
-    private val refilterNow = Runnable {
-        runCatching { activeNotifications }.getOrNull()?.forEach(::filter)
+    /**
+     * What's showing, by key, kept up as notifications come and go: asking Android for all of
+     * them on every one copied every notification over, on the thread that handles key presses.
+     */
+    private val showing = LinkedHashMap<String, StatusBarNotification>()
+    private val refilterNow = Runnable { reread() }
+
+    /** Starts again from what Android says is showing. */
+    private fun reread() {
+        val active = runCatching { activeNotifications }.getOrNull()
+        active?.forEach(::filter)
+        showing.clear()
+        active?.forEach { showing[it.key] = it }
         recount()
     }
 
@@ -25,8 +36,7 @@ class NotificationService : NotificationListenerService() {
         // Ones already showing when access was given (or the service restarted) are filtered too.
         // Just after the phone starts, apps are still putting theirs up (some before this
         // connects, unseen), so it looks again a few times.
-        runCatching { activeNotifications }.getOrNull()?.forEach(::filter)
-        recount()
+        reread()
         listOf(5_000L, 30_000L, 120_000L).forEach { main.postDelayed(refilterNow, it) }
     }
 
@@ -35,20 +45,25 @@ class NotificationService : NotificationListenerService() {
         main.removeCallbacks(refilterNow)
         media?.stop()
         media = null
+        showing.clear()
         NotificationBadges.clear()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
+        showing[sbn.key] = sbn
         filter(sbn)
         recount()
     }
 
-    override fun onNotificationRemoved(sbn: StatusBarNotification) = recount()
+    override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        showing.remove(sbn.key)
+        recount()
+    }
 
     // Someone turned an app's notification dots on or off.
     override fun onNotificationRankingUpdate(rankingMap: RankingMap) = recount()
 
-    private fun recount() = NotificationBadges.update(this, runCatching { activeNotifications }.getOrNull())
+    private fun recount() = NotificationBadges.update(this, showing.values)
 
     private fun filter(sbn: StatusBarNotification) {
         val n = sbn.notification

@@ -28,14 +28,18 @@ class Prefs(context: Context) {
         get() = runCatching { IconShape.valueOf(sp.getString("icon_shape", null)!!) }.getOrDefault(IconShape.SQUIRCLE)
         set(value) = sp.edit().putString("icon_shape", value.name).apply()
 
-    var dock: List<String?> = readDock()
-        private set
+    // Read when first asked for: most places that make a Prefs never look at these.
+    private var dockList: List<String?>? = null
+    var dock: List<String?>
+        get() = dockList ?: readDock().also { dockList = it }
+        private set(value) { dockList = value }
 
     var hidden: Set<String> = emptySet()
         private set
 
-    var widgets: List<WidgetSpec> = readWidgets()
-        private set
+    private var widgetList: List<WidgetSpec>? = null
+    val widgets: List<WidgetSpec>
+        get() = widgetList ?: readWidgets().also { widgetList = it }
 
     init {
         reload()
@@ -106,7 +110,7 @@ class Prefs(context: Context) {
         }
 
     fun setWidgets(specs: List<WidgetSpec>) {
-        widgets = specs
+        widgetList = specs
         sp.edit().putString("widgets", specs.joinToString(",") { "${it.id}:${it.heightDp}" }).apply()
     }
 

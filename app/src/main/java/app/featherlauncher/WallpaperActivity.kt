@@ -52,14 +52,24 @@ class WallpaperActivity : Activity() {
     private lateinit var root: FrameLayout
     private lateinit var overlays: Overlays
     private val io = Executors.newFixedThreadPool(3)
-    /** Thumbnails load on their own, many at once, so the first rows fill in quickly and nothing waits behind them. */
-    private val thumbIo = Executors.newFixedThreadPool(8)
+    /**
+     * Thumbnails load on their own, many at once, so the first rows fill in quickly and nothing
+     * waits behind them; behind what's on screen, so scrolling stays smooth while they do.
+     */
+    private val thumbIo = Executors.newFixedThreadPool(8) { work ->
+        Thread { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); work.run() }
+    }
     private val main = Handler(Looper.getMainLooper())
     /** Thumbnails already loaded, up to 16 MB of them. */
     private val thumbs = object : LruCache<String, Bitmap>(16 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
     private var insets = Rect()
+    /** Tiles waiting for their pictures, by address; each is read once, however many tiles want it. */
+    private val waiting = HashMap<String, MutableList<ImageView>>()
+    /** Tiles not near the screen yet; their pictures are read as they come near ([loadNearby]). */
+    private val unloaded = ArrayList<Pair<ImageView, String>>()
+    private val spot = IntArray(2)
 
     private var scroll: android.widget.ScrollView? = null
     /** The preview on top of the page, if one is open. */
@@ -91,7 +101,10 @@ class WallpaperActivity : Activity() {
             windowInsets
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { back() }
-        build()
+        root.viewTreeObserver.addOnScrollChangedListener { loadNearby() }
+        root.viewTreeObserver.addOnGlobalLayoutListener { loadNearby() }
+        // The insets usually come first and build the page; built here only if they didn't, so it's built once.
+        root.post { if (scroll == null) build() }
     }
 
     override fun onDestroy() {
@@ -122,6 +135,7 @@ class WallpaperActivity : Activity() {
         val p = palette
         val scrollY = scroll?.scrollY ?: 0
         root.removeAllViews()
+        unloaded.clear()
         val page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val header = header(p)
         page.addView(header)
@@ -506,13 +520,8 @@ class WallpaperActivity : Activity() {
                 contentDescription = name
                 // Just big enough for the tile, so each is a few kilobytes.
                 val url = "https://picsum.photos/id/$id/${dp(TILE_WIDTH)}/${dp(TILE_HEIGHT)}"
-                thumbs.get(url)?.let(::setImageBitmap) ?: thumbIo.execute {
-                    val bitmap = thumbnail(id, url)
-                    main.post {
-                        if (bitmap != null) thumbs.put(url, bitmap)
-                        setImageBitmap(bitmap)
-                    }
-                }
+                setTag(R.id.wallpaper_thumb, id)
+                thumbs.get(url)?.let(::setImageBitmap) ?: unloaded.add(this to url)
                 setOnClickListener { openPhoto(id, name) }
             }
         }))
@@ -936,6 +945,36 @@ class WallpaperActivity : Activity() {
                     (stops.last() and 0xFFFFFF) or 0x66000000, stops.last() and 0xFFFFFF, Shader.TileMode.CLAMP)
             })
         }
+
+    /** Reads the pictures of tiles within a screen of what's showing, across and down. */
+    private fun loadNearby() {
+        val w = root.width
+        val h = root.height
+        if (w == 0) return
+        val each = unloaded.iterator()
+        while (each.hasNext()) {
+            val (tile, url) = each.next()
+            if (!tile.isAttachedToWindow || tile.width == 0) continue
+            tile.getLocationInWindow(spot)
+            if (spot[0] + tile.width < -w || spot[0] > 2 * w || spot[1] + tile.height < -h || spot[1] > 2 * h) continue
+            each.remove()
+            load(tile, url)
+        }
+    }
+
+    private fun load(tile: ImageView, url: String) {
+        thumbs.get(url)?.let { return tile.setImageBitmap(it) }
+        waiting[url]?.let { it += tile; return }
+        waiting[url] = mutableListOf(tile)
+        val id = tile.getTag(R.id.wallpaper_thumb) as Int
+        thumbIo.execute {
+            val bitmap = thumbnail(id, url)
+            main.post {
+                if (bitmap != null) thumbs.put(url, bitmap)
+                waiting.remove(url)?.forEach { it.setImageBitmap(bitmap) }
+            }
+        }
+    }
 
     /** A tile's picture, kept on the phone after the first time so the page opens with them already there. */
     private fun thumbnail(id: Int, url: String): Bitmap? {

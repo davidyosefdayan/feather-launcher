@@ -20,7 +20,7 @@ object NotificationBadges {
     fun count(pkg: String) = counts[pkg] ?: 0
 
     /** Recounts from what's showing now. Called by [NotificationService] whenever that changes. */
-    fun update(service: NotificationListenerService, active: Array<StatusBarNotification>?) {
+    fun update(service: NotificationListenerService, active: Collection<StatusBarNotification>?) {
         val ranking = runCatching { service.currentRanking }.getOrNull()
         val r = NotificationListenerService.Ranking()
         val next = mutableMapOf<String, Int>()

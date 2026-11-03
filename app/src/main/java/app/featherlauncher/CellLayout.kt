@@ -131,9 +131,16 @@ class CellLayout(context: Context, attrs: AttributeSet? = null) : ViewGroup(cont
         }
     }
 
+    @android.annotation.SuppressLint("DrawAllocation") // A new grid only when it's changed (below).
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         // A page's grid, for drawing widgets at their real sizes (see [WidgetSheet]) and sizing new ones.
-        if (isPage && cellWidth > 0 && cellHeight > 0) grid = Grid(cellWidth, cellHeight, icon, Ui.dp(context, CardWidget.GAP))
+        if (isPage && cellWidth > 0 && cellHeight > 0) {
+            // A new one only when it's changed: every page lays out each minute (the clock's time).
+            val known = grid
+            if (known == null || known.cellWidth != cellWidth || known.cellHeight != cellHeight || known.icon != icon) {
+                grid = Grid(cellWidth, cellHeight, icon, Ui.dp(context, CardWidget.GAP))
+            }
+        }
         for (i in 0 until childCount) {
             val child = getChildAt(i)
             val rect = childRect(child)
@@ -254,6 +261,17 @@ class CellLayout(context: Context, attrs: AttributeSet? = null) : ViewGroup(cont
     override fun shouldDelayChildPressedState() = false
 
     fun place(view: View, x: Int, y: Int, w: Int, h: Int) {
+        // Moved within this page, it just moves: taking it off and putting it back made a widget
+        // stop and start again (its tick, its refresh) at every step of a resize.
+        val lp = view.layoutParams as? LayoutParams
+        if (view.parent === this && lp != null) {
+            lp.x = x; lp.y = y; lp.w = w; lp.h = h
+            // On top, as when it was put back: a widget being resized draws over neighbours moving aside.
+            if (indexOfChild(view) != childCount - 1) bringChildToFront(view)
+            view.requestLayout()
+            invalidate()
+            return
+        }
         (view.parent as? ViewGroup)?.removeView(view)
         addView(view, LayoutParams(x, y, w, h))
     }

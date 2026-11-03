@@ -69,10 +69,22 @@ class AnalogClockWidget(context: Context, val item: HomeItem) : FrameLayout(cont
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
         private val calendar = Calendar.getInstance()
         private var showing = false
-        private val second = Runnable { invalidate() }
+        /**
+         * Each second: drawn again if it's on screen. On a page that isn't showing it only looks
+         * again a second later, so its page comes into view with the time at most a second behind,
+         * as it would be between ticks anyway.
+         */
+        private val second = object : Runnable {
+            override fun run() {
+                if (getGlobalVisibleRect(seen)) invalidate() else postDelayed(this, 1000L - System.currentTimeMillis() % 1000L)
+            }
+        }
+        private val seen = android.graphics.Rect()
         /** The face's shading, made again only when its size or color changes, not every second. */
         private var shading: RadialGradient? = null
         private var shadingFor = 0L
+        /** The minute [contentDescription] was last set for. */
+        private var described = -1L
 
         override fun onVisibilityAggregated(isVisible: Boolean) {
             super.onVisibilityAggregated(isVisible)
@@ -144,7 +156,12 @@ class AnalogClockWidget(context: Context, val item: HomeItem) : FrameLayout(cont
             paint.color = if (solid) WidgetStyle.accentFill() else hands
             canvas.drawCircle(cx, cy, r * 0.018f, paint)
 
-            contentDescription = android.text.format.DateFormat.getTimeFormat(context).format(calendar.time)
+            // Said once a minute, not worked out every second.
+            val minute = calendar.timeInMillis / 60_000L
+            if (minute != described) {
+                described = minute
+                contentDescription = TimeFormat.format(context, calendar.timeInMillis)
+            }
             // Ticks on the second while it's on screen.
             removeCallbacks(second)
             if (showing) postDelayed(second, 1000L - System.currentTimeMillis() % 1000L)

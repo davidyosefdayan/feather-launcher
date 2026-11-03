@@ -262,11 +262,11 @@ class AppLimits private constructor(context: Context) {
                 set(Calendar.HOUR_OF_DAY, minutes / 60)
                 set(Calendar.MINUTE, minutes % 60)
             }
-            return android.text.format.DateFormat.getTimeFormat(context).format(c.time)
+            return TimeFormat.format(context, c.timeInMillis)
         }
 
         fun formatTime(context: Context, time: Long): String =
-            android.text.format.DateFormat.getTimeFormat(context).format(java.util.Date(time))
+            TimeFormat.format(context, time)
 
         /** "Every day", "Sun–Thu", or the short day names. */
         fun formatDays(days: Set<Int>): String {

@@ -56,12 +56,23 @@ class Updates private constructor(private val context: Context) {
     var busy = false
         private set
 
-    /** Checks again if the last check was a day or more ago. */
+    /**
+     * Checks again if the last check was a day or more ago. When GitHub can't be reached (offline,
+     * or a filter blocks it) it waits a few hours before trying again, instead of trying at every
+     * return to the home screen.
+     */
     fun checkIfDue() {
-        if (isDev) return
-        if (System.currentTimeMillis() - sp.getLong("checked", 0) < DAY) return
-        check { if (it) notifyIfNew() }
+        if (isDev || checking) return
+        val now = System.currentTimeMillis()
+        if (now - sp.getLong("checked", 0) < DAY || now - sp.getLong("tried", 0) in 0 until RETRY) return
+        sp.edit().putLong("tried", now).apply()
+        checking = true
+        check {
+            checking = false
+            if (it) notifyIfNew()
+        }
     }
+    private var checking = false
 
     /** Looks at the latest release; [done] gets false if GitHub couldn't be reached. */
     fun check(done: (Boolean) -> Unit) {
@@ -236,6 +247,8 @@ class Updates private constructor(private val context: Context) {
     }
 
     companion object {
+        /** How long a check that couldn't reach GitHub waits before the next. */
+        private const val RETRY = 6 * 60 * 60_000L
         private const val LATEST = "https://api.github.com/repos/davidyosefdayan/feather-launcher/releases/latest"
         private const val BETA = "https://api.github.com/repos/davidyosefdayan/feather-launcher/releases/tags/beta"
         private const val DAY = 24 * 60 * 60 * 1000L

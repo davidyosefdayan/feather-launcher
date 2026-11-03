@@ -32,8 +32,10 @@ class LauncherService : AccessibilityService() {
         // Weather wallpaper catches up too, before the lock screen is looked at.
         override fun onReceive(context: Context, intent: Intent) {
             check()
+            // The rest once per wake, as the screen turns on, not again at the unlock.
+            if (intent.action != Intent.ACTION_SCREEN_ON) return
             WeatherWallpaper.refresh(context)
-            if (intent.action == Intent.ACTION_SCREEN_ON) Shuffle.next(context, screenOn = true)
+            Shuffle.next(context, screenOn = true)
             // Filters catch any permanent notification that came back while the phone slept.
             NotificationService.refilter()
         }
@@ -99,11 +101,11 @@ class LauncherService : AccessibilityService() {
         }
 
         // A first press: decide whether this key is ours.
-        // On the lock screen, only shortcuts for all apps work, and numbers type the PIN, held or not.
-        val locked = getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
-        if (locked && KeyShortcuts.isNumber(code)) return false
-        val app = current.takeIf { !locked }
-        val home = HomeActivity.running?.takeIf { !locked && (current == packageName || current == null) && it.atHome() }
+        // On the lock screen, only shortcuts for all apps work, and numbers type the PIN, held or
+        // not. Android is only asked about it when that could matter.
+        val locked by lazy(LazyThreadSafetyMode.NONE) { getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked }
+        val app by lazy(LazyThreadSafetyMode.NONE) { current.takeIf { !locked } }
+        val home = HomeActivity.running?.takeIf { (current == packageName || current == null) && it.atHome() && !locked }
 
         // Two keys together. The first one has already done its usual thing; the second sets off the shortcut.
         for (other in others) {
@@ -115,16 +117,27 @@ class LauncherService : AccessibilityService() {
             return true
         }
 
-        // On the home screen, a number searches when pressed and does its shortcut (or offers to
-        // set one) when held.
-        if (home != null && KeyShortcuts.isNumber(code)) {
+        if (KeyShortcuts.isNumber(code)) {
             val digit = code - KeyEvent.KEYCODE_0
-            owned += code
-            press(code, onHold = { HomeActivity.running?.holdDigit(digit) }, onPress = { HomeActivity.running?.pressDigit(digit) })
-            return true
+            val downTime = event.downTime
+            // Feather is in front but not ready for keys yet: just as the screen turns on, a number
+            // pressed straight away would be lost.
+            val waking = home == null && current == packageName && HomeActivity.running == null
+            // In other apps, a number that isn't held for a shortcut is the app's; that's known
+            // without asking Android anything.
+            if (home == null && !waking && KeyShortcuts.get(this).forKey(code, current, false).none { it.press == Press.LONG }) return false
+            if (locked) return false
+            // On the home screen, a number searches when pressed and does its shortcut (or offers
+            // to set one) when held.
+            if (home != null || waking) {
+                owned += code
+                press(code, onHold = { whenReady { it.holdDigit(digit) } }, onPress = { whenReady { it.pressDigit(digit, downTime) } })
+                return true
+            }
         }
         if (!KeyShortcuts.canUse(code)) return false
-        val shortcuts = KeyShortcuts.get(this).forKey(code, app, home != null)
+        val shortcuts = KeyShortcuts.get(this).forKey(code, current, home != null).ifEmpty { return false }
+            .let { if (locked) KeyShortcuts.get(this).forKey(code, null, false) else it }
         if (shortcuts.isEmpty()) return false
         val short = shortcuts.firstOrNull { it.press == Press.SHORT }
         val long = shortcuts.firstOrNull { it.press == Press.LONG }
@@ -150,7 +163,7 @@ class LauncherService : AccessibilityService() {
             // Without a hold shortcut, holding an arrow at home keeps its built-in action.
             onHold = long?.let { { run(it.action) } }
                 ?: home?.takeIf { code in KeyEvent.KEYCODE_DPAD_UP..KeyEvent.KEYCODE_DPAD_RIGHT }?.let { { it.holdKey(code) } },
-            onPress = { single(code, short, waitForSecond = double != null) })
+            onPress = { single(code, short, waitForSecond = double != null, event.downTime) })
         return true
     }
 
@@ -171,6 +184,12 @@ class LauncherService : AccessibilityService() {
 
     private val pressActions = HashMap<Int, () -> Unit>()
 
+    /** Runs [act] on the home screen as soon as it's ready for keys (it's waking), for up to a second and a half. */
+    private fun whenReady(tries: Int = 0, act: (HomeActivity) -> Unit) {
+        HomeActivity.running?.let { return act(it) }
+        if (tries < 30) main.postDelayed({ whenReady(tries + 1, act) }, 50)
+    }
+
     /** A key held back for timing became part of a combination: it does nothing more. */
     private fun cancelTiming(code: Int) {
         holds.remove(code)?.let(main::removeCallbacks)
@@ -187,10 +206,10 @@ class LauncherService : AccessibilityService() {
     }
 
     /** A press that wasn't held: its own shortcut, or the key's normal job, possibly after waiting for a second press. */
-    private fun single(code: Int, short: KeyShortcut?, waitForSecond: Boolean) {
+    private fun single(code: Int, short: KeyShortcut?, waitForSecond: Boolean, downTime: Long) {
         val act = Runnable {
             singles.remove(code)
-            if (short != null) run(short.action) else normalPress(code)
+            if (short != null) run(short.action) else normalPress(code, downTime)
         }
         if (waitForSecond) {
             singles[code] = act
@@ -205,9 +224,9 @@ class LauncherService : AccessibilityService() {
      * in front (its search and app list type numbers too). A number pressed where there's
      * nothing to type in can't be handed back, so it's lost; few apps use numbers outside text.
      */
-    private fun normalPress(code: Int) {
+    private fun normalPress(code: Int, downTime: Long) {
         val home = HomeActivity.running
-        if (home != null && current == packageName) return home.pressKey(code)
+        if (home != null && current == packageName) return home.pressKey(code, downTime)
         KeyActionRunner.repeatNormalPress(this, code)
     }
 

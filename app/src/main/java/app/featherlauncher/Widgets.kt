@@ -116,6 +116,13 @@ class Widgets(
      */
     private fun targetCells(info: AppWidgetProviderInfo): Pair<Int, Int> {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) return info.targetCellWidth to info.targetCellHeight
+        // Read once per widget (the picker's list reads them in the background first), not each time its row shows.
+        return targets.getOrPut(info.provider) { readTargetCells(info) }
+    }
+
+    private val targets = java.util.concurrent.ConcurrentHashMap<android.content.ComponentName, Pair<Int, Int>>()
+
+    private fun readTargetCells(info: AppWidgetProviderInfo): Pair<Int, Int> {
         return runCatching {
             val pm = activity.packageManager
             val receiver = pm.getReceiverInfo(info.provider, android.content.pm.PackageManager.GET_META_DATA)
@@ -302,7 +309,10 @@ class Widgets(
             .sortedWith { a, b -> collator.compare(a.second, b.second) }
             .forEach { (pkg, app, infos) ->
                 rows += PickerRow.Header(pkg, app)
-                infos.forEach { rows += PickerRow.Widget(it, it.loadLabel(pm)) }
+                infos.forEach {
+                    targetCells(it)
+                    rows += PickerRow.Widget(it, it.loadLabel(pm))
+                }
             }
         return rows
     }
@@ -315,7 +325,15 @@ class Widgets(
 
     private inner class PickerAdapter : BaseAdapter() {
         var rows: List<PickerRow> = emptyList()
-        private val loaded = HashMap<AppWidgetProviderInfo, Drawable?>()
+        /**
+         * Previews read so far, as many as fit in [PREVIEWS] bytes; one scrolled far away is read
+         * again if it comes back. [none] has the widgets without a picture.
+         */
+        private val loaded = object : android.util.LruCache<AppWidgetProviderInfo, Drawable>(PREVIEWS) {
+            override fun sizeOf(key: AppWidgetProviderInfo, value: Drawable) =
+                (value as? android.graphics.drawable.BitmapDrawable)?.bitmap?.allocationByteCount ?: 1024
+        }
+        private val none = HashSet<AppWidgetProviderInfo>()
 
         override fun getCount() = rows.size
         override fun getItem(position: Int) = rows[position]
@@ -359,22 +377,43 @@ class Widgets(
                     preview.tag = row.info
                     preview.cells = spanX(row.info) to spanY(row.info)
                     view.setTag(R.id.widget_preview, preview)
-                    if (loaded.containsKey(row.info)) {
-                        preview.setImageDrawable(loaded[row.info])
+                    val known = loaded.get(row.info)
+                    if (known != null || row.info in none) {
+                        preview.setImageDrawable(known)
                     } else {
                         preview.setImageDrawable(null)
                         val info = row.info
+                        val box = parent.width.takeIf { it > 0 } ?: activity.resources.displayMetrics.widthPixels
                         previews.execute {
-                            val image = runCatching { info.loadPreviewImage(activity, 0) }.getOrNull()
-                                ?: runCatching { info.loadIcon(activity, 0) }.getOrNull()
+                            val image = (runCatching { info.loadPreviewImage(activity, 0) }.getOrNull()
+                                ?: runCatching { info.loadIcon(activity, 0) }.getOrNull())?.let { fit(it, box, dp(132)) }
                             main.post {
-                                loaded[info] = image
+                                if (image != null) loaded.put(info, image) else none += info
                                 if (preview.tag === info) preview.setImageDrawable(image)
                             }
                         }
                     }
                     view
                 }
+            }
+        }
+
+        /**
+         * [image] with no more pixels than it can show in a [w] by [h] box: a preview is often
+         * drawn far larger than that. It keeps its size (only its density changes), so it lays
+         * out and looks just the same.
+         */
+        private fun fit(image: Drawable, w: Int, h: Int): Drawable {
+            val bitmap = (image as? android.graphics.drawable.BitmapDrawable)?.bitmap ?: return image
+            val scale = maxOf(w.toFloat() / bitmap.width, h.toFloat() / bitmap.height)
+            if (scale >= 1f) return image
+            val smaller = android.graphics.Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt().coerceAtLeast(1),
+                (bitmap.height * scale).toInt().coerceAtLeast(1), true)
+            val width = image.intrinsicWidth
+            val height = image.intrinsicHeight
+            return object : android.graphics.drawable.BitmapDrawable(activity.resources, smaller) {
+                override fun getIntrinsicWidth() = width
+                override fun getIntrinsicHeight() = height
             }
         }
 
@@ -570,6 +609,8 @@ class Widgets(
     private fun dp(value: Int) = Ui.dp(activity, value)
 
     companion object {
+        /** How much memory the picker's previews may take, in bytes. */
+        private const val PREVIEWS = 8 * 1024 * 1024
         private const val HOST_ID = 1024
         /** Ids for the picker's live previews, well clear of the home screen's. */
         private const val PREVIEW_ID = -1000L
