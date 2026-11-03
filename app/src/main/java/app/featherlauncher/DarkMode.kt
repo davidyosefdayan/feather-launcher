@@ -7,11 +7,11 @@ import android.graphics.Bitmap
 import java.io.File
 import java.util.concurrent.Executors
 
-/** The icon look chosen in settings; Automatic follows the phone's dark mode. */
+/** The icon look chosen in settings; Automatic follows the launcher's own light or dark theme. */
 enum class IconLookSetting(val label: String) { AUTO("Automatic"), LIGHT("Light"), DARK("Dark"), TINTED("Tinted") }
 
 /**
- * What changes when the phone goes dark: icons (if set to Automatic), a dimmer wallpaper, and
+ * What changes in the dark: icons (if set to Automatic, with the launcher's theme), a dimmer wallpaper, and
  * the wallpaper itself when a light and a dark one are paired.
  */
 object DarkMode {
@@ -20,9 +20,16 @@ object DarkMode {
     fun isNight(context: Context) =
         context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
 
+    /** Whether the launcher is dark: its Theme setting, which can be set to match the phone. */
+    fun isDarkTheme(context: Context, prefs: Prefs) = when (prefs.themeMode) {
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+        ThemeMode.SYSTEM -> isNight(context)
+    }
+
     /** The icon look to draw right now. */
     fun iconLook(context: Context, prefs: Prefs): IconLook = when (prefs.iconLook) {
-        IconLookSetting.AUTO -> if (isNight(context)) IconLook.DARK else IconLook.NORMAL
+        IconLookSetting.AUTO -> if (isDarkTheme(context, prefs)) IconLook.DARK else IconLook.NORMAL
         IconLookSetting.LIGHT -> IconLook.NORMAL
         IconLookSetting.DARK -> IconLook.DARK
         IconLookSetting.TINTED -> IconLook.TINTED
