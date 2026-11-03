@@ -24,9 +24,8 @@ class NotificationService : NotificationListenerService() {
     /** Starts again from what Android says is showing. */
     private fun reread() {
         val active = runCatching { activeNotifications }.getOrNull()
-        active?.forEach(::filter)
         showing.clear()
-        active?.forEach { showing[it.key] = it }
+        active?.forEach { if (!filter(it)) showing[it.key] = it }
         recount()
     }
 
@@ -51,8 +50,8 @@ class NotificationService : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        showing[sbn.key] = sbn
-        filter(sbn)
+        // One a filter hides or a limit holds is gone in a moment; it isn't shown on the way.
+        if (filter(sbn)) showing.remove(sbn.key) else showing[sbn.key] = sbn
         recount()
     }
 
@@ -69,9 +68,10 @@ class NotificationService : NotificationListenerService() {
         ActiveNotifications.update(this, showing.values)
     }
 
-    private fun filter(sbn: StatusBarNotification) {
+    /** Hides [sbn] if a filter says to, or holds it back for an app limit. Returns whether it did. */
+    private fun filter(sbn: StatusBarNotification): Boolean {
         val n = sbn.notification
-        if (sbn.packageName == packageName || n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
+        if (sbn.packageName == packageName || n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return false
         val extras = n.extras
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
         val text = (extras.getCharSequence(Notification.EXTRA_BIG_TEXT) ?: extras.getCharSequence(Notification.EXTRA_TEXT))?.toString().orEmpty()
@@ -87,11 +87,11 @@ class NotificationService : NotificationListenerService() {
             // Snoozed, not dismissed: it comes back by itself when the limit ends.
             snoozeNotification(sbn.key, until - now)
             filters.remember(HiddenNotification(sbn.packageName, title, text, now, "Held until ${AppLimits.formatTime(this, until)}"))
-            return
+            return true
         }
 
         val on = limits.limits.filter { it.isOn(now) }.map { it.id }.toSet()
-        val filter = filters.filters.firstOrNull { it.hides(sbn.packageName, "$title\n$text", on) } ?: return
+        val filter = filters.filters.firstOrNull { it.hides(sbn.packageName, "$title\n$text", on) } ?: return false
         if (sbn.isClearable) {
             cancelNotification(sbn.key)
         } else {
@@ -103,6 +103,7 @@ class NotificationService : NotificationListenerService() {
         if (filters.history.firstOrNull()?.let { it.app == sbn.packageName && it.title == title && it.text == text } != true) {
             filters.remember(HiddenNotification(sbn.packageName, title, text, now, describe(filter)))
         }
+        return true
     }
 
     private fun describe(filter: NotificationFilter) = when {

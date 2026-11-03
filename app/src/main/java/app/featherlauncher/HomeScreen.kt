@@ -397,7 +397,6 @@ class HomeScreen(
                 }
                 is NotificationsWidget -> {
                     onMore = { NotificationsSheet.show(activity, palette(), overlays) }
-                    onAllow = { Setup.NOTIFICATIONS.start(activity) }
                     // Opening one up brings new buttons; the keypad reaches them as it did the rows.
                     onRebuilt = { if (inside === this) pressablesIn(this).forEach { keyTarget(it, this) } }
                 }
@@ -2302,7 +2301,8 @@ class HomeScreen(
 
     /** Back inside a widget: out to the widget itself. Returns false when not inside one. */
     fun leaveWidget(): Boolean {
-        val widget = inside ?: return false
+        // By touch too, Back closes a notification opened up in its widget.
+        val widget = inside ?: return views.values.any { (it as? NotificationsWidget)?.collapse() == true }
         // A notification opened up to show its buttons closes first.
         if ((widget as? NotificationsWidget)?.collapse() == true && activity.currentFocus?.isInTouchMode == false) return true
         inside = null

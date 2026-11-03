@@ -38,6 +38,8 @@ object ActiveNotifications {
         private set
 
     private val listeners = mutableSetOf<() -> Unit>()
+    /** Whether [list] has come from the service since access was last taken away. */
+    private var known = false
 
     /** Called on the main thread whenever [list] changes. */
     fun listen(listener: () -> Unit) = listeners.add(listener)
@@ -47,18 +49,24 @@ object ActiveNotifications {
         val ranking = runCatching { service.currentRanking }.getOrNull()
         val r = NotificationListenerService.Ranking()
         val order = ranking?.orderedKeys?.withIndex()?.associate { it.value to it.index }.orEmpty()
-        list = active.filter { sbn ->
+        val next = active.filter { sbn ->
             val n = sbn.notification
             // Group summaries repeat their children; minimized ones aren't in the shade either.
             sbn.packageName != service.packageName && n.flags and Notification.FLAG_GROUP_SUMMARY == 0 &&
                 (ranking == null || !ranking.getRanking(sbn.key, r) || r.importance > NotificationManager.IMPORTANCE_MIN) &&
-                (Note.title(n).isNotEmpty() || Note.text(n).isNotEmpty())
+                // One drawn by its app alone (a timer) still has its buttons; it goes by its app's name.
+                (Note.title(n).isNotEmpty() || Note.text(n).isNotEmpty() || !n.actions.isNullOrEmpty())
         }.sortedWith(compareBy<StatusBarNotification> { order[it.key] ?: Int.MAX_VALUE }.thenByDescending { it.postTime })
+        // Rankings are updated often without anything new to show; a posted one is a new object.
+        if (known && next.size == list.size && next.indices.all { next[it] === list[it] }) return
+        known = true
+        list = next
         changed()
     }
 
     /** Access was taken away: nothing is known anymore. */
     fun clear() {
+        known = false
         list = emptyList()
         changed()
     }
@@ -78,8 +86,10 @@ class Note(private val context: Context, val sbn: StatusBarNotification) {
     val key: String = sbn.key
     val title = title(n)
     val text = text(n)
-    /** All of the text, for the sheet, which has room for more than a line. */
-    val longText = n.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.takeIf { it.isNotBlank() } ?: text
+    /** All of the text, for when it's opened up and the sheet: an inbox's lines, a conversation's messages. */
+    val longText = n.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.takeIf { it.isNotBlank() }
+        ?: n.extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)?.joinToString("\n")?.takeIf { it.isNotBlank() }
+        ?: messages()?.takeIf { it.isNotBlank() } ?: text
     val app: String = runCatching {
         context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(sbn.packageName, 0)).toString()
     }.getOrDefault(sbn.packageName)
@@ -88,18 +98,25 @@ class Note(private val context: Context, val sbn: StatusBarNotification) {
     /** A music or video player's: its buttons are pictures (back, play, skip). */
     val media = n.extras.containsKey(Notification.EXTRA_MEDIA_SESSION) ||
         n.extras.getString(Notification.EXTRA_TEMPLATE)?.contains("MediaStyle") == true
-    /** One with buttons, which opens up in the widget to show them. */
-    val expandable = actions.isNotEmpty()
+    /** One with buttons, or more text than its line, which opens up in the widget to show them. */
+    val expandable = actions.isNotEmpty() || longText != text
     /** Whether it can be cleared: not one an app keeps showing, such as music that's playing. */
     val clearable = sbn.isClearable
+
+    /** A conversation's messages, a line each with who sent it. */
+    @Suppress("DEPRECATION")
+    private fun messages() = n.extras.getParcelableArray(Notification.EXTRA_MESSAGES)?.mapNotNull { m ->
+        val words = (m as? android.os.Bundle)?.getCharSequence("text") ?: return@mapNotNull null
+        m.getCharSequence("sender")?.let { "$it: $words" } ?: words.toString()
+    }?.joinToString("\n")
 
     fun icon(): Drawable? = runCatching { context.packageManager.getApplicationIcon(sbn.packageName) }.getOrNull()
     /** The picture an app puts on it: album art, a contact's photo. */
     fun art(): Drawable? = runCatching { n.getLargeIcon()?.loadDrawable(context) }.getOrNull()
     fun actionIcon(a: Notification.Action): Drawable? = runCatching { a.getIcon()?.loadDrawable(context) }.getOrNull()
 
-    /** "3:41 PM" today, "Oct 30" before. */
-    fun whenText(): String =
+    /** "3:41 PM" today, "Oct 30" before; nothing for one whose app says its time doesn't matter (a timer). */
+    fun whenText(): String = if (!n.extras.getBoolean(Notification.EXTRA_SHOW_WHEN, true)) "" else
         if (android.text.format.DateUtils.isToday(time)) android.text.format.DateFormat.getTimeFormat(context).format(java.util.Date(time))
         else android.text.format.DateFormat.format("MMM d", time).toString()
 
@@ -143,18 +160,17 @@ class Note(private val context: Context, val sbn: StatusBarNotification) {
 }
 
 /**
- * The notifications showing, a line each: its title and text, cut short with … when it's long.
+ * The notifications showing, a line each: its title and text, cut short with … when it's long
+ * (on a narrow card, the text under the title). As many lines as fit, spaced evenly down the card.
  * A tap opens its app; one with buttons, or more text than fits, has a › and opens up instead,
  * filling the card with all of its text (scrolling, if it must) and its buttons. When they don't all fit,
- * the last line says how many more, and opens them all in a sheet. Swiping a line to the side,
- * or left or right on the keypad, clears it.
+ * the heading says how many more, and opens them all in a sheet. Swiping a line to the side,
+ * or left or right on the keypad, clears it. Only on a card: a list of words on the wallpaper is hard to read.
  */
 @SuppressLint("ViewConstructor")
 class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context, item) {
     /** All of them, in a sheet. */
     var onMore: (() -> Unit)? = null
-    /** Without notification access: where to allow it. */
-    var onAllow: (() -> Unit)? = null
     /** After the card is made again, with new things in it to press. */
     var onRebuilt: (() -> Unit)? = null
 
@@ -163,6 +179,23 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
     /** Where the keypad goes once the line it was on is cleared. */
     private var refocus: String? = null
     private val changed = { refresh() }
+    /** Narrow: each line's text goes under its title, and the times are left out. */
+    private var narrow = false
+    /** Not wide enough for the times beside the words. */
+    private var timeless = false
+    /** So narrow the apps' icons are left out too. */
+    private var iconless = false
+
+    override fun sizeChanged(w: Int, h: Int): Boolean {
+        val nextNarrow = w < dp(260)
+        val nextTimeless = w < dp(320)
+        val nextIconless = w < dp(180)
+        if (nextNarrow == narrow && nextTimeless == timeless && nextIconless == iconless) return false
+        narrow = nextNarrow
+        timeless = nextTimeless
+        iconless = nextIconless
+        return true
+    }
 
     override fun onAttachedToWindow() {
         ActiveNotifications.listen(changed)
@@ -175,23 +208,43 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
     }
 
     override fun refresh() {
-        // The keypad stays on what it was on, if that's still here.
-        val focused = findFocus()?.takeIf { !it.isInTouchMode }?.tag as? String
-        content.removeAllViews()
-        content.gravity = Gravity.TOP
         if (!NotificationService.isEnabled(context)) {
-            setOnClickListener { onAllow?.invoke() }
-            content.addView(heading(R.drawable.ic_notification, "Notifications"))
-            content.addView(gapAbove(quiet("Tap to allow notification access", 14f), 6))
-            return
+            expanded = null
+            return prompt(R.drawable.ic_notification, "Notifications", "Allow notification access to see your notifications") {
+                allow(Setup.NOTIFICATIONS)
+            }
         }
-        val all = ActiveNotifications.list.map { Note(context, it) }
-        val open = all.firstOrNull { it.key == expanded }
-        if (open == null) expanded = null
+        val active = ActiveNotifications.list
+        if (active.none { it.key == expanded }) expanded = null
         // Opened up, a tap between its buttons does nothing, rather than opening the sheet over it.
         setOnClickListener { if (expanded == null) onMore?.invoke() }
-        // One column filling the card, so the card's own column never leaves it out.
-        content.addView(if (open != null) expandedView(open) else listView(all), LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        // Only what's on the card: an app updating a notification often changes none of it. The
+        // day is there for the times, which say the date once it isn't today.
+        if (same(listOf(narrow, timeless, iconless, expanded, TimeFormat.is24(context), JewishCalendar.day(System.currentTimeMillis(), java.util.TimeZone.getDefault()),
+                active.map { sbn -> sbn.notification.let { n -> listOf(sbn.key, if (n.`when` > 0) n.`when` else sbn.postTime, Note.title(n), Note.text(n),
+                    n.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString(), n.extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)?.toList(),
+                    n.actions?.map { it.title?.toString() }, sbn.isClearable) } }))) return
+        // The keypad stays on what it was on, if that's still here.
+        val focused = findFocus()?.takeIf { !it.isInTouchMode }?.tag as? String
+        val all = active.map { Note(context, it) }
+        val open = all.firstOrNull { it.key == expanded }
+        content.removeAllViews()
+        content.gravity = Gravity.TOP
+        content.spread = false
+        setCard(WidgetStyle.cardBackground(context))
+        if (open != null) {
+            content.addView(FitColumn.dropFirst(expandedView(open), -1), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        } else if (all.isEmpty()) {
+            // Nothing to show is calm, not a problem: a quiet line in the middle of the card.
+            content.addView(heading(R.drawable.ic_notification, "Notifications"))
+            content.addView(FitColumn.dropFirst(quiet("No notifications").apply { gravity = Gravity.CENTER }, -1),
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        } else {
+            // The lines' highlights reach a little past the heading's edges; their contents line up with it.
+            content.addView(FitColumn.dropFirst(lines(all), -1), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply {
+                marginStart = -dp(ROW_PAD); marginEnd = -dp(ROW_PAD)
+            })
+        }
         // One cleared with the keypad hands the highlight to the line that took its place.
         (focused?.let { findViewWithTag<View>(it) } ?: refocus?.let { findViewWithTag<View>(it) })?.requestFocusFromTouch()
         refocus = null
@@ -215,27 +268,42 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
         if (keypad) (findViewWithTag<View>("${note.key}#0") ?: findViewWithTag("${note.key}#open"))?.requestFocusFromTouch()
     }
 
-    private fun listView(all: List<Note>) = LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        addView(heading(R.drawable.ic_notification, "Notifications", all.size.takeIf { it > 0 }?.toString()))
-        if (all.isEmpty()) {
-            addView(gapAbove(quiet("No notifications", 14f), 10))
-            return@apply
-        }
-        val more = WidgetStyle.cardText(context, 14f, WidgetStyle.label, WidgetStyle.onCardQuiet()).apply {
+    /**
+     * The heading and a line for each notification that fits. The heading says how many there
+     * are; when they don't all fit, it says how many more instead, and opens them all.
+     */
+    private fun lines(all: List<Note>): Lines {
+        val count = WidgetStyle.cardText(context, 13f, WidgetStyle.body, WidgetStyle.onCardQuiet()).apply { text = all.size.toString() }
+        val more = WidgetStyle.cardText(context, 13f, WidgetStyle.label, WidgetStyle.accent()).apply {
             tag = "more"
             gravity = Gravity.CENTER_VERTICAL
-            background = Ui.pressable(context, Ui.RADIUS_S, focusColor = WidgetStyle.onCard())
-            setPadding(dp(ROW_PAD), dp(6), dp(ROW_PAD), dp(6))
+            setCompoundDrawablesRelative(null, null, context.getDrawable(R.drawable.ic_chevron_right)?.mutate()?.apply {
+                setTint(WidgetStyle.accent())
+                setBounds(0, 0, dp(16), dp(16))
+            }, null)
+            compoundDrawablePadding = dp(2)
+            background = Ui.pressable(context, Ui.RADIUS_PILL, focusColor = WidgetStyle.onCard())
+            setPadding(dp(8), dp(3), dp(2), dp(3))
             setOnClickListener { onMore?.invoke() }
         }
-        // The rows' highlights reach a little past the heading's edges; their contents line up with it.
-        addView(Rows(context, more).apply {
-            all.forEach { addView(Row(it)) }
+        val top = heading(R.drawable.ic_notification, "Notifications").apply {
+            addView(count)
             addView(more)
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply {
-            topMargin = dp(6); marginStart = -dp(ROW_PAD); marginEnd = -dp(ROW_PAD)
-        })
+        }
+        val title = top.getChildAt(1) as TextView
+        fun View.shows(visibility: Int) {
+            if (this.visibility != visibility) this.visibility = visibility
+        }
+        return Lines(context, top, dp(ROW_PAD), dp(6)) { hidden, width ->
+            if (more.text.toString() != "$hidden more") more.text = "$hidden more"
+            val end = if (hidden > 0) more else count
+            end.measure(MeasureSpec.UNSPECIFIED, MeasureSpec.UNSPECIFIED)
+            // On a narrow card, when they don't both fit: the title goes before how many more, the count before the title.
+            val fits = dp(26) + title.paint.measureText(title.text.toString()) + end.measuredWidth <= width
+            title.shows(if (fits || hidden == 0) View.VISIBLE else View.INVISIBLE)
+            count.shows(if (hidden == 0 && fits) View.VISIBLE else View.GONE)
+            more.shows(if (hidden > 0) View.VISIBLE else View.GONE)
+        }.apply { all.forEach { addView(Row(it)) } }
     }
 
     /**
@@ -243,10 +311,17 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
      * when. One with buttons, or text that doesn't fit, has a › after the time, and opens up.
      */
     private inner class Row(val note: Note) : LinearLayout(context), SwipesAway {
-        private val words = WidgetStyle.cardText(context, 14f, WidgetStyle.body, WidgetStyle.onCardQuiet()).apply {
-            text = styled(note.title.ifEmpty { note.app }, note.text)
+        // Narrow, the title has a line to itself and its text goes under it; otherwise the text follows it.
+        private val words = if (narrow) WidgetStyle.cardText(context, 15f, WidgetStyle.title).apply { text = note.title.ifEmpty { note.app } }
+            else WidgetStyle.cardText(context, 15f, WidgetStyle.body, WidgetStyle.onCardQuiet()).apply { text = styled(note.title.ifEmpty { note.app }, note.text) }
+        private val below = if (narrow && note.text.isNotEmpty()) WidgetStyle.cardText(context, 13f, WidgetStyle.body, WidgetStyle.onCardQuiet()).apply {
+            text = note.text
+            setPadding(0, dp(2), 0, 0)
+        } else null
+        private val time = WidgetStyle.cardText(context, 13f, WidgetStyle.body, WidgetStyle.onCardQuiet()).apply {
+            text = note.whenText()
+            if (timeless) visibility = View.GONE
         }
-        private val time = WidgetStyle.cardText(context, 12f, WidgetStyle.body, WidgetStyle.onCardQuiet()).apply { text = note.whenText() }
         private val more = ImageView(context).apply {
             setImageResource(R.drawable.ic_chevron_right)
             imageTintList = ColorStateList.valueOf(WidgetStyle.onCardQuiet())
@@ -259,12 +334,18 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
             gravity = Gravity.CENTER_VERTICAL
             tag = note.key
             background = Ui.pressable(context, Ui.RADIUS_S, focusColor = WidgetStyle.onCard())
-            setPadding(dp(ROW_PAD), dp(6), dp(ROW_PAD), dp(6))
+            // Two lines of words need less room around them to look as roomy.
+            val v = dp(if (below != null) ROW_V - 2 else ROW_V)
+            setPadding(dp(ROW_PAD), v, dp(ROW_PAD), v)
             setOnClickListener { if (opens) expand(note, !isInTouchMode && isFocused) else note.open() }
-            addView(ImageView(context).apply { setImageDrawable(note.icon()) }, LayoutParams(dp(ICON), dp(ICON)).apply { marginEnd = dp(10) })
-            addView(words, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+            if (!iconless) addView(ImageView(context).apply { setImageDrawable(note.icon()) }, LayoutParams(dp(ICON), dp(ICON)).apply { marginEnd = dp(10) })
+            addView(if (below == null) words else LinearLayout(context).apply {
+                orientation = VERTICAL
+                addView(words)
+                addView(below)
+            }, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
             addView(time, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
-            addView(more, LayoutParams(dp(18), dp(18)).apply { marginStart = dp(8) })
+            addView(more, LayoutParams(dp(18), dp(18)).apply { marginStart = dp(if (timeless) 4 else 8) })
         }
 
         // Swiping it to either side clears it, as in the shade. One that can't be cleared still
@@ -275,6 +356,8 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
         private var swiping = false
         private var velocity: VelocityTracker? = null
 
+        // A tap still goes through the row's own onTouchEvent, which clicks it.
+        @SuppressLint("ClickableViewAccessibility")
         override fun onTouchEvent(ev: MotionEvent): Boolean {
             velocity = (velocity ?: VelocityTracker.obtain()).also { it.addMovement(ev) }
             // Raw positions: the row itself moves under the finger.
@@ -351,12 +434,14 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
         }
 
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            // Whether the text fits beside the time, worked out before laying out, so the row
-            // isn't laid out twice. Visibility only changes when the answer does.
-            val room = MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight - dp(ICON + 10) - dp(8) -
-                time.paint.measureText(time.text.toString()).toInt()
-            opens = note.expandable || android.text.Layout.getDesiredWidth(words.text, words.paint) > room
-            more.visibility = if (opens) View.VISIBLE else View.GONE
+            // Whether the text fits beside the time and the ›'s room, worked out before laying out,
+            // so the row isn't laid out twice. Visibility only changes when the answer does.
+            val room = MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight - (if (iconless) 0 else dp(ICON + 10)) - dp(18 + if (timeless) 4 else 8) -
+                (if (timeless) 0 else dp(8) + time.paint.measureText(time.text.toString()).toInt())
+            opens = note.expandable || android.text.Layout.getDesiredWidth(words.text, words.paint) > room ||
+                below != null && below.paint.measureText(note.text) > room
+            // Its room stays when it has none, so the times line up.
+            more.visibility = if (opens) View.VISIBLE else View.INVISIBLE
             super.onMeasure(widthMeasureSpec, heightMeasureSpec)
         }
     }
@@ -375,11 +460,14 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(ImageView(context).apply { setImageDrawable(note.icon()) }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(8) })
-            // The app, then the title beside it, leaving the rest of the card for the text.
-            addView(WidgetStyle.cardText(context, 14f, WidgetStyle.label, WidgetStyle.accent()).apply { text = note.app })
-            addView(WidgetStyle.cardText(context, 15f, WidgetStyle.title).apply { text = note.title.takeIf { it != note.app }.orEmpty() },
-                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(8); marginEnd = dp(8) })
-            addView(WidgetStyle.cardText(context, 12f, WidgetStyle.body, WidgetStyle.onCardQuiet()).apply { text = note.whenText() })
+            // The app, then the title beside it, leaving the rest of the card for the text. Narrow,
+            // the icon says which app, and the time is left out, as on the lines.
+            if (!narrow) addView(WidgetStyle.cardText(context, 14f, WidgetStyle.label, WidgetStyle.accent()).apply { text = note.app },
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
+            addView(WidgetStyle.cardText(context, 15f, WidgetStyle.title).apply {
+                text = if (narrow) note.title.ifEmpty { note.app } else note.title.takeIf { it != note.app }.orEmpty()
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) })
+            if (!timeless) addView(WidgetStyle.cardText(context, 13f, WidgetStyle.body, WidgetStyle.onCardQuiet()).apply { text = note.whenText() })
             addView(iconButton(R.drawable.ic_close, WidgetStyle.onCard(), null, 32) { collapse() }.apply {
                 tag = "${note.key}#close"
             }, LinearLayout.LayoutParams(dp(32), dp(32)).apply { marginStart = dp(6) })
@@ -461,42 +549,68 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
     }
 
     /**
-     * The rows that fit, in order. When some don't, the last line is [more] instead, saying how
-     * many are left out.
+     * [top] (the heading, [inset] in from the sides, [gap] above the lines) and the lines, as many
+     * as fit. [hidden] is told how many don't, and [top]'s width, before [top] is measured, so it can say so. When
+     * some don't fit, the room left over is shared out between the lines, so the last sits on the
+     * bottom of the card; when they all do, they keep to the top.
      */
-    private class Rows(context: Context, private val more: TextView) : LinearLayout(context) {
+    private class Lines(context: Context, private val top: View, private val inset: Int, private val gap: Int,
+                        private val hidden: (Int, Int) -> Unit) : ViewGroup(context) {
         init {
-            orientation = VERTICAL
+            addView(top)
         }
 
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            val rows = (0 until childCount).map(::getChildAt).filter { it !== more }
-            val width = MeasureSpec.makeMeasureSpec(MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight, MeasureSpec.EXACTLY)
-            fun height(v: View): Int {
-                v.measure(width, MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
-                val lp = v.layoutParams as MarginLayoutParams
-                return v.measuredHeight + lp.topMargin + lp.bottomMargin
+            val rows = (1 until childCount).map(::getChildAt)
+            val width = MeasureSpec.getSize(widthMeasureSpec)
+            val exactly = MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY)
+            val loose = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            fun heading(left: Int): Int {
+                hidden(left, width - 2 * inset)
+                top.measure(MeasureSpec.makeMeasureSpec(width - 2 * inset, MeasureSpec.EXACTLY), loose)
+                return top.measuredHeight + gap
             }
-            val room = MeasureSpec.getSize(heightMeasureSpec) - paddingTop - paddingBottom
-            val heights = rows.map(::height)
-            val all = MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED || heights.sum() <= room
+            rows.forEach { it.measure(exactly, loose) }
+            val room = if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) Int.MAX_VALUE else MeasureSpec.getSize(heightMeasureSpec)
             var shown = rows.size
-            if (!all) {
-                var used = height(more)
+            var used = heading(0) + rows.sumOf { it.measuredHeight }
+            if (used > room) {
+                // The heading may be a little taller saying how many more.
+                used = heading(1)
                 shown = 0
-                while (shown < rows.size && used + heights[shown] <= room) used += heights[shown++]
+                while (shown < rows.size && used + rows[shown].measuredHeight <= room) used += rows[shown++].measuredHeight
+                heading(rows.size - shown)
+                // Each line a little taller, its contents in the middle of it.
+                val spare = room - used
+                rows.take(shown).forEachIndexed { i, v ->
+                    val extra = spare / shown + if (i < spare % shown) 1 else 0
+                    v.measure(exactly, MeasureSpec.makeMeasureSpec(v.measuredHeight + extra, MeasureSpec.EXACTLY))
+                }
             }
-            rows.forEachIndexed { i, v -> v.visibility = if (i < shown) View.VISIBLE else View.GONE }
-            more.visibility = if (all) View.GONE else View.VISIBLE
-            val words = "…  ${rows.size - shown} more"
-            if (more.text.toString() != words) more.text = words
-            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            rows.forEachIndexed { i, v ->
+                val next = if (i < shown) View.VISIBLE else View.GONE
+                if (v.visibility != next) v.visibility = next
+            }
+            setMeasuredDimension(width, if (shown == rows.size) minOf(used, room) else room)
+        }
+
+        override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+            top.layout(inset, 0, inset + top.measuredWidth, top.measuredHeight)
+            var y = top.measuredHeight + gap
+            for (i in 1 until childCount) {
+                val v = getChildAt(i)
+                if (v.visibility != View.VISIBLE) continue
+                v.layout(0, y, v.measuredWidth, y + v.measuredHeight)
+                y += v.measuredHeight
+            }
         }
     }
 
     private companion object {
         /** Room around a row's contents, inside its highlight. */
-        const val ROW_PAD = 6
+        const val ROW_PAD = 8
+        /** Room above and below a row's contents, at the least. */
+        const val ROW_V = 7
         /** A row's app icon. */
         const val ICON = 20
         /** How fast a swipe (dp a second) clears a row however short it is. */
@@ -504,7 +618,7 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
     }
 }
 
-/** Every notification showing, in a sheet: what the widget's last line opens when they don't all fit. */
+/** Every notification showing, in a sheet: what the widget's heading opens when they don't all fit. */
 object NotificationsSheet {
     fun show(ctx: Context, p: Palette, overlays: Overlays) {
         val dp = { v: Int -> Ui.dp(ctx, v) }

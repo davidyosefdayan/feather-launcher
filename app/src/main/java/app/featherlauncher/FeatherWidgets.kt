@@ -31,7 +31,7 @@ enum class FeatherKind(val ref: String, val label: String, val w: Int, val h: In
     WEATHER("weather", "Weather", 4, 2, "Current weather with hourly and daily forecasts"),
     MEDIA("media", "Now playing", 4, 1, "Play, pause and skip whatever's playing"),
     ZMANIM("zmanim", "Zmanim", 4, 2, "Upcoming zmanim", minH = 2),
-    NOTIFICATIONS("notifications", "Notifications", 4, 2, "Your notifications, a line each"),
+    NOTIFICATIONS("notifications", "Notifications", 4, 2, "Your notifications, a line each", minH = 2),
     ;
 
     /**
