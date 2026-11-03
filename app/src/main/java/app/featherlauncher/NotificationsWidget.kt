@@ -546,8 +546,15 @@ class NotificationsWidget(context: Context, item: HomeItem) : CardWidget(context
         setOnClickListener { onClick() }
     }
 
-    /** A button with words on it, in the accent's soft fill. */
-    private fun pill(words: String, onClick: () -> Unit) = WidgetStyle.cardText(context, 13f, WidgetStyle.label, WidgetStyle.onAccentFill()).apply {
+    /**
+     * A button with words on it, in the accent's soft fill. Words that don't fit are drawn a little
+     * closer, else cut short with …, as an app's name is on the home screen.
+     */
+    private fun pill(words: String, onClick: () -> Unit) = AppIconView.NameView(context).apply {
+        setTextColor(WidgetStyle.onAccentFill())
+        typeface = WidgetStyle.label
+        includeFontPadding = false
+        setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f)
         text = words
         gravity = Gravity.CENTER
         setPadding(dp(10), 0, dp(10), 0)
@@ -714,12 +721,10 @@ object NotificationsSheet {
                     setOnClickListener { press() }
                 }, LinearLayout.LayoutParams(dp(42), dp(42)).apply { marginEnd = dp(Ui.SPACE_S) })
             } else {
-                addView(TextView(ctx).apply {
+                addView(AppIconView.NameView(ctx).apply {
                     text = words
                     style(TextStyle.Label, p.text)
                     setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f)
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.END
                     gravity = Gravity.CENTER
                     setPadding(dp(Ui.SPACE_M), 0, dp(Ui.SPACE_M), 0)
                     background = Ui.rounded(ctx, p.surfaceHigh, Ui.RADIUS_PILL)

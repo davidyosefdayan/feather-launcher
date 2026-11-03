@@ -31,8 +31,6 @@ class AppIconView(context: Context, val item: HomeItem) : LinearLayout(context) 
             setTextSize(TypedValue.COMPLEX_UNIT_SP, NAME_SP)
             setTextColor(0xFFFFFFFF.toInt())
             setShadowLayer(dp(3).toFloat(), 0f, dp(1).toFloat(), 0x99000000.toInt())
-            isSingleLine = true
-            ellipsize = android.text.TextUtils.TruncateAt.END
             gravity = Gravity.CENTER
             includeFontPadding = false
             setPadding(dp(NAME_PADDING), 0, dp(NAME_PADDING), 0)
@@ -76,14 +74,31 @@ class AppIconView(context: Context, val item: HomeItem) : LinearLayout(context) 
     /** The icon's bounds in this view, for the keypad highlight and drag image. */
     val iconView: ImageView get() = icon
 
-    /** An app's name on one line: its letters drawn a little closer when that makes it fit, else cut short with an ellipsis. */
-    private class NameView(context: Context) : TextView(context) {
+    /**
+     * An app's name on one line: its letters drawn a little closer when that makes it fit, else
+     * cut short with an ellipsis. Words on a notification's buttons too ([NotificationsWidget]).
+     */
+    class NameView(context: Context) : TextView(context) {
+        init {
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             val room = MeasureSpec.getSize(widthMeasureSpec) - totalPaddingLeft - totalPaddingRight
             val spacing = nameSpacing(paint, text.toString(), room.toFloat())
             // Only when it changes, since setting it asks for another layout.
             if (letterSpacing != spacing) letterSpacing = spacing
             super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        }
+
+        // On one line, centred text scrolls the view sideways, and a foreground (a button's
+        // keypad highlight) would be drawn off to that side; it stays on the view instead.
+        override fun onDrawForeground(canvas: android.graphics.Canvas) {
+            canvas.save()
+            canvas.translate(scrollX.toFloat(), scrollY.toFloat())
+            super.onDrawForeground(canvas)
+            canvas.restore()
         }
     }
 
