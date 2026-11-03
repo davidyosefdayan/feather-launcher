@@ -64,6 +64,11 @@ class HomeScreen(
     val workspace = Workspace(activity)
     private val shortcuts = Shortcuts(activity)
     private val views = HashMap<Long, View>()
+    /**
+     * Each folder's picture and what it was drawn from; drawn again only when that changes, not at
+     * every return home. Up here, before init draws the first ones.
+     */
+    private val folderIcons = HashMap<Long, Pair<List<Any?>, Bitmap>>()
     private val drag = Drag()
     private var resize: ResizeFrame? = null
 
@@ -395,6 +400,11 @@ class HomeScreen(
                         activity.startActivity(Intent(activity, SettingsActivity::class.java)
                             .putExtra(SettingsActivity.EXTRA_PAGE, SettingsActivity.Page.CALENDAR.name))
                     }
+                }
+                is NotificationsWidget -> {
+                    onMore = { NotificationsSheet.show(activity, palette(), overlays) }
+                    // Opening one up brings new buttons; the keypad reaches them as it did the rows.
+                    onRebuilt = { if (inside === this) pressablesIn(this).forEach { keyTarget(it, this) } }
                 }
             }
             setOnLongClickListener { onItemLongPress(item, it); true }
@@ -2155,7 +2165,10 @@ class HomeScreen(
             if (from == null) {
                 inside = null
             } else {
-                nearest(from, parts - from, direction)?.requestFocusFromTouch()
+                // Text that scrolls (an opened notification's) scrolls first; at its end, the highlight moves on.
+                // A notification's line takes left and right, to clear it.
+                if ((from as? SwipesAway)?.swipeAway(direction) == true) return true
+                if (!scrollIn(from, direction)) nearest(from, parts - from, direction)?.requestFocusFromTouch()
                 return true
             }
         }
@@ -2294,7 +2307,10 @@ class HomeScreen(
 
     /** Back inside a widget: out to the widget itself. Returns false when not inside one. */
     fun leaveWidget(): Boolean {
-        val widget = inside ?: return false
+        // By touch too, Back closes a notification opened up in its widget.
+        val widget = inside ?: return views.values.any { (it as? NotificationsWidget)?.collapse() == true }
+        // A notification opened up to show its buttons closes first.
+        if ((widget as? NotificationsWidget)?.collapse() == true && activity.currentFocus?.isInTouchMode == false) return true
         inside = null
         // Gone from it already (a touch, say): Back does its usual thing.
         if (activity.currentFocus?.let { it.isInTouchMode || it !in pressablesIn(widget) } != false) return false
@@ -2323,6 +2339,24 @@ class HomeScreen(
 
     private fun itemsOn(page: Int): List<View> = workspace.items.filter { it.page == page }
         .mapNotNull { views[it.id] }.filter { it.isFocusable && it.visibility == View.VISIBLE }
+
+    /** Scrolls what can scroll inside [view] up or down by most of its height. Returns false when nothing can go further. */
+    private fun scrollIn(view: View, direction: Int): Boolean {
+        if (direction != View.FOCUS_UP && direction != View.FOCUS_DOWN) return false
+        val way = if (direction == View.FOCUS_DOWN) 1 else -1
+        fun find(v: View): View? = if (v.canScrollVertically(way)) v
+            else (v as? ViewGroup)?.let { g -> (0 until g.childCount).firstNotNullOfOrNull { find(g.getChildAt(it)) } }
+        val scroller = find(view) ?: return false
+        // Text moves by whole lines, keeping one of the last in sight, so a line is never left cut in half.
+        val line = ((scroller as? ViewGroup)?.getChildAt(0) as? TextView)?.lineHeight
+        val step = if (line != null && line > 0) {
+            val lines = (scroller.height / line - 1).coerceAtLeast(1)
+            val top = scroller.scrollY / line + if (way < 0 && scroller.scrollY % line > 0) 1 else 0
+            (top + way * lines).coerceAtLeast(0) * line - scroller.scrollY
+        } else way * scroller.height * 2 / 3
+        if (scroller is android.widget.ScrollView) scroller.smoothScrollBy(0, step) else scroller.scrollBy(0, step)
+        return true
+    }
 
     /** What can be pressed inside [widget], each only once (not what's inside a button too). */
     private fun pressablesIn(widget: View): List<View> {

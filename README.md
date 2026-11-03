@@ -17,7 +17,7 @@ Plain Kotlin and platform Views, no AndroidX and no third-party libraries, so it
 **Home screen and app list**
 - Pages, a dock, folders and widgets. Drag a widget over another and they swap places.
 - A clock with the date, the Hebrew date and parsha, and under it the weather and what's coming up next.
-- Widgets in Android's own style, colored from your wallpaper: Agenda, Weather, Now playing and Zmanim.
+- Widgets in Android's own style, colored from your wallpaper: Agenda, Weather, Now playing, Zmanim and Notifications.
 - A Jewish calendar (Yom Tov, fasts, Rosh Chodesh, the parsha, the Omer and Daf Yomi) and zmanim for your location.
 - An app list grouped into categories (with tabs) or all at once (with category chips). Drag apps to reorder them or move them between categories.
 - Hidden apps, kept on their own page behind an optional PIN.
@@ -133,7 +133,7 @@ Only adb can send it. Every part is optional: `categories` and `hidden` replace 
 | `NotificationBadges`, `IconBadges` | Notification counts on app icons, and the other marks drawn on icons |
 | `Updates` | Updates from GitHub releases |
 | `ClockInfo`, `Glance`, `Zmanim`, `JewishCalendar`, `SecondCalendar` | The clock's lines, zmanim and calendars |
-| `Widgets`, `WidgetView`, `FeatherWidgets`, `WidgetStyle`, `Weather` | Other apps' widgets, the widget list, and Feather's own widgets |
+| `Widgets`, `WidgetView`, `FeatherWidgets`, `NotificationsWidget`, `WidgetStyle`, `Weather` | Other apps' widgets, the widget list, and Feather's own widgets |
 | `WallpaperActivity`, `DarkMode` | Wallpapers and dark mode |
 | `Setup`, `SetupImport` | First-run checklist, and loading a setup over adb |
 
