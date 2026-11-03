@@ -1345,20 +1345,25 @@ class HomeScreen(
             val cy = ((centerY - h * cells.cellHeight / 2) / cells.cellHeight).roundToInt()
             val col = cx.coerceIn(0, workspace.cols(page) - w)
             val row = cy.coerceIn(0, workspace.rows(page) - h)
-            val candidate = if (w == 1 && h == 1) folderCandidate(page, col, row, view) else null
-            setFolderTarget(candidate)
-            if (candidate != null) {
+            val near = if (w == 1 && h == 1) iconNear(page, col, row, view) else null
+            val onto = folderOnto(near)
+            if (onto != null) {
                 clearReorder(commit = false)
                 setTarget(null)
+                setFolderTarget(onto)
             } else {
+                setFolderTarget(null)
                 // After a short hover, what's in the way slides aside: icons for an app, anything for a widget.
-                // Over a free spot there's nothing to wait for: the highlight follows at once.
+                // Over a free spot there's nothing to wait for: the highlight follows at once. Close
+                // to an icon it waits longer, so it doesn't slide away while it's being moved onto.
                 val cell = Triple(page, col, row)
-                if (cell != hoverCell) {
+                val close = near != null && near.second < nearRadius
+                if (cell != hoverCell || close != hoverClose) {
                     hoverCell = cell
+                    hoverClose = close
                     root.removeCallbacks(reorder)
                     if (workspace.isFree(page, col, row, w, h, source?.item)) applyReorder()
-                    else root.postDelayed(reorder, REORDER_DELAY)
+                    else root.postDelayed(reorder, if (close) NEAR_DELAY else REORDER_DELAY)
                 }
             }
         }
@@ -1403,7 +1408,6 @@ class HomeScreen(
                 background = android.graphics.drawable.GradientDrawable().apply {
                     cornerRadius = dp(Ui.RADIUS_BAR).toFloat()
                     setStroke(dp(2), 0xB3FFFFFF.toInt())
-                    setColor(0x1AFFFFFF)
                 }
                 alpha = 0f
                 root.addView(this, FrameLayout.LayoutParams(dockBox0.width(), dockBox0.height(), Gravity.TOP or Gravity.START).apply {
@@ -1464,11 +1468,29 @@ class HomeScreen(
 
         private var folderTarget: HomeItem? = null
 
+        /** How close to an icon's middle a drop makes or fills a folder. */
+        private val folderRadius get() = dp(AppIconView.ICON) * 0.45f
+        /** How far off its middle a folder about to be made stays lit. */
+        private val litRadius get() = dp(AppIconView.ICON) * 0.65f
+        /** How close to an icon it waits longer before sliding aside ([NEAR_DELAY]). */
+        private val nearRadius get() = dp(AppIconView.ICON) * 0.8f
+        /** Whether the hover being timed is close to an icon. */
+        private var hoverClose = false
+
         /**
-         * The app or folder at ([col], [row]) if the dragged icon is over the middle of it,
-         * meaning a drop would make or fill a folder. Folders can't go inside folders.
+         * The icon a drop would make or fill a folder with, from the nearest one and how far its
+         * middle is: once one is lit, it stays until the dragged icon is clearly off it.
          */
-        private fun folderCandidate(page: Int, col: Int, row: Int, view: View): HomeItem? {
+        private fun folderOnto(near: Pair<HomeItem, Float>?): HomeItem? {
+            val (item, distance) = near ?: return null
+            return item.takeIf { distance < folderRadius || it === folderTarget && distance < litRadius }
+        }
+
+        /**
+         * The app or folder at ([col], [row]) that could take the dragged icon, and how far the
+         * dragged icon is from its middle. Folders can't go inside folders.
+         */
+        private fun iconNear(page: Int, col: Int, row: Int, view: View): Pair<HomeItem, Float>? {
             if (source?.item?.type == HomeItem.Type.FOLDER || source?.kind != null || source?.other != null) return null
             val occupant = workspace.on(page).firstOrNull {
                 it.x == col && it.y == row && it !== source?.item && it !== source?.folder && it !in shifted.keys && it !== bumped?.first &&
@@ -1479,19 +1501,22 @@ class HomeScreen(
             val r = cells.cellRect(Rect(col, row, col + 1, row + 1))
             val cx = origin.left + r.exactCenterX()
             val cy = origin.top + r.exactCenterY() - cells.iconOffset
-            val distance = hypot(view.x + view.width / 2f - cx, view.y + view.height / 2f - cy)
-            return occupant.takeIf { distance < dp(AppIconView.ICON) * 0.45f }
+            return occupant to hypot(view.x + view.width / 2f - cx, view.y + view.height / 2f - cy)
         }
 
+        /** Lights up [next] as the folder a drop would make or fill: a plate behind it, and it grows a little. */
         private fun setFolderTarget(next: HomeItem?) {
             if (next === folderTarget) return
             folderTarget?.let { old ->
                 val cells = containerFor(old.page)
                 cells.dropPreviewGrow = false
                 cells.dropPreview = null
+                (views[old.id] as? AppIconView)?.iconView?.animate()?.scaleX(1f)?.scaleY(1f)?.setDuration(150)?.start()
             }
             folderTarget = next
             next?.let {
+                (views[it.id] as? AppIconView)?.iconView?.animate()?.scaleX(1.12f)?.scaleY(1.12f)?.setDuration(150)
+                    ?.setInterpolator(DecelerateInterpolator(2f))?.start()
                 val cells = containerFor(it.page)
                 cells.dropPreviewIsIcon = true
                 cells.dropPreviewGrow = true
@@ -1758,6 +1783,7 @@ class HomeScreen(
             hideEdgeZones()
             // Released before the hover delay ran: work out the spot now.
             if (hoverCell != null && target?.let { Triple(it.first, it.second, it.third) } != hoverCell) applyReorder()
+            dockWait?.let { root.removeCallbacks(dockMove); dockMove.run() }
             val src = source ?: return finish()
             val t = target
             val intoFolder = folderTarget
@@ -1851,12 +1877,30 @@ class HomeScreen(
             val others = workspace.on(Workspace.DOCK).filter { it !== source?.item }.mapNotNull { other ->
                 (views[other.id] as? AppIconView)?.let { other to rectInRoot(it.iconView) }
             }
-            val onto = if (source?.item?.type == HomeItem.Type.FOLDER) null else others.firstOrNull { (other, r) ->
-                other !== source?.folder && hypot(x - r.exactCenterX(), y - r.exactCenterY()) < dp(AppIconView.ICON) * 0.45f
-            }?.first
-            setFolderTarget(onto)
-            if (onto != null) return setTarget(null)
-            overDock(others.count { (_, r) -> r.exactCenterX() < x })
+            val near = if (source?.item?.type == HomeItem.Type.FOLDER) null else others.filter { it.first !== source?.folder }
+                .map { (other, r) -> other to hypot(x - r.exactCenterX(), y - r.exactCenterY()) }.minByOrNull { it.second }
+            stopDockWait()
+            val onto = folderOnto(near)
+            if (onto != null) {
+                setTarget(null)
+                return setFolderTarget(onto)
+            }
+            setFolderTarget(null)
+            // Close to an icon, the others wait before making room, so it doesn't slide away while
+            // it's being moved onto; elsewhere they move at once.
+            val slot = others.count { (_, r) -> r.exactCenterX() < x }
+            if (near == null || near.second >= nearRadius || slot == dockGap) return overDock(slot)
+            dockWait = slot
+            root.postDelayed(dockMove, NEAR_DELAY)
+        }
+
+        /** The place in the dock being waited on, close to an icon, if any. */
+        private var dockWait: Int? = null
+        private val dockMove = Runnable { dockWait?.let { dockWait = null; overDock(it) } }
+
+        private fun stopDockWait() {
+            root.removeCallbacks(dockMove)
+            dockWait = null
         }
 
         /** Opens up place [slot] in the dock for the dragged app, sliding the others aside; none when it's full. */
@@ -1877,6 +1921,7 @@ class HomeScreen(
 
         /** Away from the dock: the others close up, over the dragged app's place too if it came from there. */
         private fun leaveDock() {
+            stopDockWait()
             if (dockGap == null && (dockArranged || source?.item?.inDock != true)) return
             dockGap = null
             dockArranged = true
@@ -1909,6 +1954,7 @@ class HomeScreen(
         }
 
         private fun finish() {
+            stopDockWait()
             setFolderTarget(null)
             dragView?.let(root::removeView)
             dragView = null
@@ -2412,5 +2458,7 @@ class HomeScreen(
         private const val TOOLBAR_PADDING = 6
         /** How long a dragged app hovers over a spot before icons there make room. */
         private const val REORDER_DELAY = 180L
+        /** How long a dragged icon waits close to another before that one slides aside. */
+        private const val NEAR_DELAY = 500L
     }
 }
