@@ -761,19 +761,23 @@ class HomeScreen(
 
     // region Folders
 
-    /** The folder's icon: a tile in the icon shape with up to four of its apps inside. */
+    /**
+     * The folder's icon: a tile in the icon shape with up to four of its apps inside. In the
+     * dock, a tile the dock's own color would vanish, so it takes an open folder's lighter tone.
+     */
     private fun folderIcon(item: HomeItem): Bitmap {
         val icons = item.apps.take(4).map { key -> repo.find(key)?.let(repo::icon) }
-        val from = listOf(prefs.iconShape, palette().folderFill, dp(64)) + icons.map { it?.let(System::identityHashCode) }
+        val fill = if (item.inDock) palette().folderPanel else palette().folderFill
+        val from = listOf(prefs.iconShape, fill, dp(64)) + icons.map { it?.let(System::identityHashCode) }
         folderIcons[item.id]?.let { (drawnFrom, bitmap) -> if (drawnFrom == from) return bitmap }
-        return drawFolderIcon(icons).also { folderIcons[item.id] = from to it }
+        return drawFolderIcon(icons, fill).also { folderIcons[item.id] = from to it }
     }
 
-    private fun drawFolderIcon(icons: List<Bitmap?>): Bitmap {
+    private fun drawFolderIcon(icons: List<Bitmap?>, fill: Int): Bitmap {
         val size = dp(64)
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        canvas.drawPath(prefs.iconShape.path(size.toFloat()), Paint(Paint.ANTI_ALIAS_FLAG).apply { color = palette().folderFill })
+        canvas.drawPath(prefs.iconShape.path(size.toFloat()), Paint(Paint.ANTI_ALIAS_FLAG).apply { color = fill })
         val pad = size * 0.17f
         val gap = size * 0.07f
         val mini = (size - 2 * pad - gap) / 2
@@ -1512,12 +1516,17 @@ class HomeScreen(
             workspace.removeEmptyPages()
             workspace.save()
             bindAll()
-            val icon = (views[folder.id] as? AppIconView)?.iconView
             val view = dragView ?: return finish()
-            if (icon == null) return fadeOut()
-            val rect = rectInRoot(icon)
-            view.animate().x(rect.left.toFloat()).y(rect.top.toFloat()).scaleX(0.45f).scaleY(0.45f).alpha(0f)
-                .setDuration(200).withEndAction { finish() }.start()
+            // A new folder's icon is only laid out on the next frame; before that it's at the top left.
+            root.post {
+                val icon = (views[folder.id] as? AppIconView)?.iconView
+                if (icon == null || icon.width == 0) return@post fadeOut()
+                val rect = rectInRoot(icon)
+                val w = view.width.takeIf { it > 0 } ?: view.layoutParams.width
+                val h = view.height.takeIf { it > 0 } ?: view.layoutParams.height
+                view.animate().x(rect.exactCenterX() - w / 2f).y(rect.exactCenterY() - h / 2f).scaleX(0.45f).scaleY(0.45f).alpha(0f)
+                    .setDuration(200).withEndAction { finish() }.start()
+            }
         }
 
         /** Items slid aside to make room, with the cell each was moved to. */
@@ -1830,23 +1839,24 @@ class HomeScreen(
         /** The last place in the dock the dragged app can go: after the others, while there's room. */
         private fun dockLast() = minOf(dockCount(), workspace.cols(Workspace.DOCK) - 1)
 
-        /** Over the dock with an app: onto an app's icon makes a folder; elsewhere, the others make room. */
+        /**
+         * Over the dock with an app: onto an app's icon makes a folder; between two, they make
+         * room. Both go by where the others are now, so the room opens beside an icon and never
+         * slides it out from under the app.
+         */
         private fun moveOverDock(view: View) {
             clearReorder(commit = false)
             val x = view.x + view.width / 2f
             val y = view.y + view.height / 2f
-            val onto = if (source?.item?.type == HomeItem.Type.FOLDER) null else workspace.on(Workspace.DOCK).firstOrNull { other ->
-                other !== source?.item && other !== source?.folder &&
-                    (views[other.id] as? AppIconView)?.let { v ->
-                        val r = rectInRoot(v.iconView)
-                        hypot(x - r.exactCenterX(), y - r.exactCenterY()) < dp(AppIconView.ICON) * 0.45f
-                    } == true
+            val others = workspace.on(Workspace.DOCK).filter { it !== source?.item }.mapNotNull { other ->
+                (views[other.id] as? AppIconView)?.let { other to rectInRoot(it.iconView) }
             }
+            val onto = if (source?.item?.type == HomeItem.Type.FOLDER) null else others.firstOrNull { (other, r) ->
+                other !== source?.folder && hypot(x - r.exactCenterX(), y - r.exactCenterY()) < dp(AppIconView.ICON) * 0.45f
+            }?.first
             setFolderTarget(onto)
             if (onto != null) return setTarget(null)
-            // Which place it's over, with the others spread out to make room for it.
-            val slot = ((x - rectInRoot(dock).left - dock.originFor(dockCount() + 1)) / dock.cellWidth).toInt()
-            overDock(slot)
+            overDock(others.count { (_, r) -> r.exactCenterX() < x })
         }
 
         /** Opens up place [slot] in the dock for the dragged app, sliding the others aside; none when it's full. */
