@@ -132,6 +132,10 @@ class PagesScreen(
             home.scaleY = 1 - 0.08f * first
             backdrop.alpha = (255 * first).toInt()
             for (view in content) {
+                // All of it zooms about the screen's middle, as one piece (the background stays
+                // put). Set as it goes: opening, it's laid out only after the first frame.
+                view.pivotX = home.width / 2f - view.left
+                view.pivotY = home.height / 2f - view.top
                 view.alpha = second
                 view.scaleX = 1.06f - 0.06f * second
                 view.scaleY = 1.06f - 0.06f * second
