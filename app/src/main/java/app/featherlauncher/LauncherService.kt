@@ -99,11 +99,15 @@ class LauncherService : AccessibilityService() {
         }
 
         // A first press: decide whether this key is ours.
-        val home = HomeActivity.running?.takeIf { (current == packageName || current == null) && it.atHome() }
+        // On the lock screen, only shortcuts for all apps work, and numbers type the PIN, held or not.
+        val locked = getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
+        if (locked && KeyShortcuts.isNumber(code)) return false
+        val app = current.takeIf { !locked }
+        val home = HomeActivity.running?.takeIf { !locked && (current == packageName || current == null) && it.atHome() }
 
         // Two keys together. The first one has already done its usual thing; the second sets off the shortcut.
         for (other in others) {
-            val combo = KeyShortcuts.get(this).combo(other, code, current, home != null) ?: continue
+            val combo = KeyShortcuts.get(this).combo(other, code, app, home != null) ?: continue
             owned += code
             cancelTiming(other)
             held += code
@@ -111,29 +115,16 @@ class LauncherService : AccessibilityService() {
             return true
         }
 
-        val digit = if (code in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) code - KeyEvent.KEYCODE_0 else null
-        if (digit != null) {
-            // On the lock screen, numbers type the PIN.
-            if (getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked) return false
-            if (home != null) {
-                owned += code
-                press(code, onHold = { HomeActivity.running?.holdDigit(digit) }, onPress = { HomeActivity.running?.pressDigit(digit) })
-                return true
-            }
-            // In other apps, a number that's set does its thing when held, instead of the phone's
-            // speed dial. Not while typing, where the keyboard needs every press. A quick press
-            // can't be handed back to the app, so it's lost; few apps use numbers outside text.
-            val action = KeyShortcuts.get(this).digit(digit)?.action ?: return false
-            if (typing()) return false
+        // On the home screen, a number searches when pressed and does its shortcut (or offers to
+        // set one) when held.
+        if (home != null && KeyShortcuts.isNumber(code)) {
+            val digit = code - KeyEvent.KEYCODE_0
             owned += code
-            // In Feather's own search and app list, a quick press still types the number (to
-            // search or dial); Feather is in front whenever it's running.
-            val feather = HomeActivity.running
-            press(code, onHold = { run(action) }, onPress = { feather?.pressKey(code) })
+            press(code, onHold = { HomeActivity.running?.holdDigit(digit) }, onPress = { HomeActivity.running?.pressDigit(digit) })
             return true
         }
         if (!KeyShortcuts.canUse(code)) return false
-        val shortcuts = KeyShortcuts.get(this).forKey(code, current, home != null)
+        val shortcuts = KeyShortcuts.get(this).forKey(code, app, home != null)
         if (shortcuts.isEmpty()) return false
         val short = shortcuts.firstOrNull { it.press == Press.SHORT }
         val long = shortcuts.firstOrNull { it.press == Press.LONG }
@@ -144,8 +135,8 @@ class LauncherService : AccessibilityService() {
             run(short!!.action)
             return true
         }
-        // Held back, * or # gets typed for it afterwards; older Android can't do that in a
-        // password box, so there the key goes straight to the box.
+        // Held back, a number, * or # gets typed for it afterwards; older Android can't do that in
+        // a password box, so there the key goes straight to the box.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && KeyShortcuts.typesInTextBoxes(code) && textBox()?.isPassword == true) return false
         owned += code
         // A second press while waiting for one is a double press.
@@ -209,7 +200,11 @@ class LauncherService : AccessibilityService() {
         }
     }
 
-    /** The key's usual job, for a key held back to time it. On the home screen, the launcher gets the key itself. */
+    /**
+     * The key's usual job, for a key held back to time it. Feather gets the key itself when it's
+     * in front (its search and app list type numbers too). A number pressed where there's
+     * nothing to type in can't be handed back, so it's lost; few apps use numbers outside text.
+     */
     private fun normalPress(code: Int) {
         val home = HomeActivity.running
         if (home != null && current == packageName) return home.pressKey(code)
@@ -217,13 +212,6 @@ class LauncherService : AccessibilityService() {
     }
 
     private fun run(action: KeyAction) = KeyActionRunner.run(this, action, this)
-
-    /** Whether a text box is being typed in, in whichever app is in front. */
-    private fun typing(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return textBox() != null
-        if (inputMethod?.currentInputStarted != true) return false
-        return (inputMethod?.currentInputEditorInfo?.inputType ?: 0) != android.text.InputType.TYPE_NULL
-    }
 
     /**
      * The text box in focus, for Android 11 and 12, where the service can't be told about typing

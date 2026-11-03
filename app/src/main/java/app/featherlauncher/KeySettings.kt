@@ -8,6 +8,7 @@ import android.provider.ContactsContract
 import android.provider.Settings
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -90,7 +91,8 @@ class KeySettings(private val s: SettingsActivity) {
         content.addView(s.heading(p, "Number keys"))
         content.addView(s.spacer())
         content.addView(Components.group(s, p, listOf(1, 2, 3, 4, 5, 6, 7, 8, 9, 0).map { digit -> digitRow(p, digit) }))
-        content.addView(Components.footnote(s, p, "Hold a number key to run its shortcut, except while typing. On the home screen, press a number key to search."))
+        content.addView(Components.footnote(s, p,
+            "Hold a number key to run its shortcut. A quick press still types the number, or searches on the home screen. On the lock screen, number keys only type your PIN."))
     }
 
     private fun digitRow(p: Palette, digit: Int) = LinearLayout(s).apply {
@@ -126,10 +128,7 @@ class KeySettings(private val s: SettingsActivity) {
         })
         addView(chevron(p), LinearLayout.LayoutParams(s.dp(22), s.dp(22)))
         setOnClickListener {
-            pickAction("Hold $digit to", action, allowNone = true) { picked ->
-                shortcuts.setDigit(digit, picked)
-                s.build()
-            }
+            edit(shortcuts.digit(digit)?.let(ShortcutDraft::of) ?: ShortcutDraft(KeyEvent.KEYCODE_0 + digit, press = Press.LONG))
         }
     }
 
@@ -165,15 +164,16 @@ class KeySettings(private val s: SettingsActivity) {
                 chevron = true, inset = Ui.SPACE_L) { captureKey(draft) },
             Components.row(s, p, draft.action?.type?.icon ?: R.drawable.ic_hotkey, "Action",
                 draft.action?.let { KeyShortcuts.describe(it, ::appLabel) } ?: "Choose", chevron = true, inset = Ui.SPACE_L) {
-                pickAction("Choose an action", draft.action, allowNone = false) { picked ->
+                pickAction("Choose an action", draft.action) { picked ->
                     draft.action = picked
                     s.build()
                 }
             },
         )))
 
-        // Two keys together are just pressed; one key can be pressed, held or double pressed.
-        if (draft.keyCode2 == null) {
+        // Two keys together are just pressed; a number is held, since its press types it; any
+        // other key can be pressed, held or double pressed.
+        if (draft.keyCode2 == null && key?.let(KeyShortcuts::isNumber) != true) {
             content.addView(s.heading(p, "How it's pressed"))
             content.addView(s.spacer())
             content.addView(Components.segmented(s, p, Press.entries.map { it.label }, draft.press.ordinal) {
@@ -230,8 +230,7 @@ class KeySettings(private val s: SettingsActivity) {
                     isFocusable = true
                     setOnClickListener {
                         shortcuts.remove(draft.original)
-                        s.draft = null
-                        s.open(SettingsActivity.Page.KEYS)
+                        s.closeEditor()
                     }
                 }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, s.dp(48)).apply { topMargin = s.dp(Ui.SPACE_S) })
             }
@@ -249,6 +248,7 @@ class KeySettings(private val s: SettingsActivity) {
         }
         return when {
             draft.keyCode2 != null -> "Press both keys at the same time. Each key still works as usual on its own."
+            KeyShortcuts.isNumber(key) -> "A quick press of $name still types it."
             draft.press == Press.SHORT -> "A quick press of $name does only this $where."
             draft.scope != Scope.ALL -> "Everywhere else, $name works as usual."
             KeyShortcuts.canRepeatNormalPress(key) -> "A quick press of $name still works as usual."
@@ -259,14 +259,16 @@ class KeySettings(private val s: SettingsActivity) {
 
     private fun keyLabel(draft: ShortcutDraft): String? {
         val key = draft.keyCode ?: return null
-        return draft.keyCode2?.let { "${KeyShortcuts.keyName(key)} + ${KeyShortcuts.keyName(it)}" } ?: KeyShortcuts.keyName(key)
+        return draft.keyCode2?.let { "${KeyShortcuts.keyName(key)} + ${KeyShortcuts.keyName(it)}" }
+            // A number is only ever held, which shows here instead of under How it's pressed.
+            ?: if (KeyShortcuts.isNumber(key)) "${Press.LONG.verb} ${KeyShortcuts.keyName(key)}" else KeyShortcuts.keyName(key)
     }
 
     private fun pickScopeApp(draft: ShortcutDraft) {
         val current = s.repo.apps.firstOrNull { it.packageName == draft.app }?.key
         s.root.postDelayed({
-            pickApp("Works in", current, allowNone = false) { key ->
-                draft.app = key?.let { s.repo.find(it)?.packageName }
+            pickApp("Works in", current) { key ->
+                draft.app = s.repo.find(key)?.packageName
                 s.build()
             }
         }, 160)
@@ -279,8 +281,7 @@ class KeySettings(private val s: SettingsActivity) {
         val action = draft.action!!
         shortcuts.put(KeyShortcut(draft.keyCode!!, draft.press, action, draft.scope, draft.keyCode2,
             draft.app.takeIf { draft.scope == Scope.APP }), draft.original)
-        s.draft = null
-        s.open(SettingsActivity.Page.KEYS)
+        s.closeEditor()
         if (action.type == ActionType.CALL && s.checkSelfPermission(Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
             // Without it, the shortcut opens the dialer with the number instead of calling.
             s.requestPermissions(arrayOf(Manifest.permission.CALL_PHONE), 0)
@@ -308,15 +309,13 @@ class KeySettings(private val s: SettingsActivity) {
             })
         }
         s.keyCapture = { keys ->
-            val digits = android.view.KeyEvent.KEYCODE_0..android.view.KeyEvent.KEYCODE_9
-            val unusable = keys.firstOrNull { !KeyShortcuts.canUse(it) && it !in digits }
+            val unusable = keys.firstOrNull { !KeyShortcuts.canUse(it) }
             when {
-                // Numbers alone have their own section; together with another key they're fine.
-                keys.size == 1 && keys[0] in digits -> hint.text = "Numbers are set under Number keys. Press another key."
                 unusable != null -> hint.text = "${KeyShortcuts.keyName(unusable)} can't be used. Press another key."
                 else -> {
                     draft.keyCode = keys[0]
                     draft.keyCode2 = keys.getOrNull(1)
+                    if (keys.size == 1 && KeyShortcuts.isNumber(keys[0])) draft.press = Press.LONG
                     s.keyCapture = null
                     LauncherService.capturing = false
                     s.overlays.dismiss()
@@ -331,30 +330,27 @@ class KeySettings(private val s: SettingsActivity) {
         })
     }
 
-    /** What a shortcut or a held number does; [allowNone] adds a way to clear it (null). */
-    private fun pickAction(title: String, current: KeyAction?, allowNone: Boolean, onPick: (KeyAction?) -> Unit) {
+    /** What a shortcut does. */
+    private fun pickAction(title: String, current: KeyAction?, onPick: (KeyAction) -> Unit) {
         val p = s.palette
         val types = ActionType.entries.filter { it.listed }
-        val offset = if (allowNone) 1 else 0
         // An app action counts as Open an app, which is where it's chosen.
         val currentType = if (current?.type == ActionType.APP_ACTION) ActionType.APP else current?.type
-        val selected = types.indexOf(currentType).let { if (it < 0) if (allowNone) 0 else -1 else it + offset }
         Components.choiceSheet(s, p, s.overlays, title,
-            (if (allowNone) listOf("Nothing" to null) else emptyList()) + types.map { t ->
+            types.map { t ->
                 t.label to ImageView(s).apply {
                     setImageResource(t.icon)
                     imageTintList = ColorStateList.valueOf(p.textSecondary)
                 }
             },
-            selected) { i ->
-            if (allowNone && i == 0) return@choiceSheet onPick(null)
-            val type = types[i - offset]
+            types.indexOf(currentType)) { i ->
+            val type = types[i]
             when (type.needs) {
                 ActionType.Needs.NOTHING -> onPick(KeyAction(type))
                 ActionType.Needs.APP -> s.root.postDelayed({
                     val currentApp = current?.takeIf { it.type == ActionType.APP || it.type == ActionType.APP_ACTION }?.value
-                    pickApp("Open an app", currentApp, allowNone = false) { key ->
-                        val entry = key?.let(s.repo::find) ?: return@pickApp
+                    pickApp("Open an app", currentApp) { key ->
+                        val entry = s.repo.find(key) ?: return@pickApp
                         pickAppAction(entry, current, onPick)
                     }
                 }, 160)
@@ -367,7 +363,7 @@ class KeySettings(private val s: SettingsActivity) {
      * Opening [entry] itself or one of its own actions (Messages' "New conversation", a diary
      * app's barcode scanner). Apps without actions just open.
      */
-    private fun pickAppAction(entry: AppEntry, current: KeyAction?, onPick: (KeyAction?) -> Unit) {
+    private fun pickAppAction(entry: AppEntry, current: KeyAction?, onPick: (KeyAction) -> Unit) {
         val actions = Shortcuts(s).list(entry)
         val open = KeyAction(ActionType.APP, entry.key)
         if (actions.isEmpty()) return onPick(open)
@@ -389,15 +385,11 @@ class KeySettings(private val s: SettingsActivity) {
         }, 160)
     }
 
-    private fun pickApp(title: String, current: String?, allowNone: Boolean, onPick: (String?) -> Unit) {
+    private fun pickApp(title: String, current: String?, onPick: (String) -> Unit) {
         val apps = s.visibleApps.sortedBy { it.label.lowercase() }
-        val offset = if (allowNone) 1 else 0
-        val options = (if (allowNone) listOf("None" to null) else emptyList()) + apps.map { e ->
-            e.label to ImageView(s).apply { setImageBitmap(s.repo.icon(e)) }
-        }
-        val selected = apps.indexOfFirst { it.key == current }.let { if (it < 0) if (allowNone) 0 else -1 else it + offset }
-        Components.choiceSheet(s, s.palette, s.overlays, title, options, selected) { i ->
-            onPick(if (allowNone && i == 0) null else apps[i - offset].key)
+        val options = apps.map { e -> e.label to ImageView(s).apply { setImageBitmap(s.repo.icon(e)) } }
+        Components.choiceSheet(s, s.palette, s.overlays, title, options, apps.indexOfFirst { it.key == current }) { i ->
+            onPick(apps[i].key)
         }
     }
 

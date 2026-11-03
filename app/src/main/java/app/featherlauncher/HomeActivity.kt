@@ -83,8 +83,6 @@ class HomeActivity : Activity(), HomeScreen.Host {
     private var showingHidden = false
 
     private var drawerOpen = false
-    /** Set while the drawer is choosing an app for something (a number key). */
-    private var pick: ((AppEntry) -> Unit)? = null
     /** The query was typed on the keypad, so Back deletes a character instead of closing. */
     private var keypadQuery = false
 
@@ -462,7 +460,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
             onClick = { entry, view -> choose(entry, view) },
             onLongClick = { entry, view ->
                 // Only a finger's hold can turn into a drag; held with the keypad, the next touch would pick it up.
-                if (pick == null && view.isInTouchMode) appDrag.arm(entry, view)
+                if (view.isInTouchMode) appDrag.arm(entry, view)
                 appMenu(entry, view)
             },
         )
@@ -521,7 +519,6 @@ class HomeActivity : Activity(), HomeScreen.Host {
     /** Swipe up: the app list. */
     private fun openDrawer() {
         searching = false
-        pick = null
         keypadQuery = false
         search.setText("")
         if (category == null) category = visibleCategories().firstOrNull()?.id
@@ -529,21 +526,11 @@ class HomeActivity : Activity(), HomeScreen.Host {
         updateResults()
     }
 
-    /**
-     * Swipe down (or the search button, or a number key): Smart Search.
-     * With [onPick], it's choosing an app for something instead of opening it.
-     */
-    private fun openSearch(
-        query: String = "",
-        fromKeypad: Boolean = false,
-        hint: String = "Search apps, contacts and more",
-        onPick: ((AppEntry) -> Unit)? = null,
-    ) {
+    /** Swipe down (or the search button, or a number key): Smart Search. */
+    private fun openSearch(query: String = "", fromKeypad: Boolean = false) {
         searching = true
-        pick = onPick
         keypadQuery = fromKeypad
         expanded.clear()
-        search.hint = hint
         search.setText(query)
         search.setSelection(query.length)
         showPanel(fromTop = !drawerOpen)
@@ -569,9 +556,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         val f = progress.coerceIn(0f, 1f)
         if (searching != search || drawer.visibility != View.VISIBLE) {
             searching = search
-            pick = null
             this.search.setText("")
-            this.search.hint = "Search apps, contacts and more"
             if (!search && category == null) category = visibleCategories().firstOrNull()?.id
             setPanelLook()
             updateResults()
@@ -682,7 +667,6 @@ class HomeActivity : Activity(), HomeScreen.Host {
         if (!drawerOpen) return
         drawerOpen = false
         showingHidden = false
-        pick = null
         getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(search.windowToken, 0)
         search.clearFocus()
         home.visibility = View.VISIBLE
@@ -908,10 +892,8 @@ class HomeActivity : Activity(), HomeScreen.Host {
         chipsScroll.visibility = View.GONE
         val raw = search.text.toString().trim()
         val rows = ArrayList<DrawerAdapter.Row>()
-        val pickingApp = pick != null
         var sections = 0
-        // Picking an app for something only ever shows apps.
-        fun shows(section: SearchSection) = if (pickingApp) section == SearchSection.APPS else prefs.searchShows(section)
+        fun shows(section: SearchSection) = prefs.searchShows(section)
         val ranker = history.ranker(raw)
         val t9 = Search.isT9(raw)
 
@@ -950,7 +932,6 @@ class HomeActivity : Activity(), HomeScreen.Host {
         else if (raw.isEmpty()) {
             repo.apps.filter { it.key !in prefs.hidden }
                 .sortedByDescending { prefs.launchCount(it.key) }
-                .let { if (pickingApp) it.sortedBy { e -> e.label.lowercase() } else it }
                 .map { Hit(it, "app:${it.key}", 0.0) }
         } else {
             // Hidden apps are only on the hidden apps page, never in search.
@@ -964,7 +945,7 @@ class HomeActivity : Activity(), HomeScreen.Host {
         val settingHits = if (raw.isEmpty() || !shows(SearchSection.SETTINGS)) emptyList() else found(smartSearch.settings(raw))
         val fileHits = if (raw.isEmpty() || !shows(SearchSection.FILES)) emptyList() else found(mediaResults.takeIf { mediaFor == raw }.orEmpty())
 
-        val ranked = if (raw.isEmpty() || pickingApp) emptyList()
+        val ranked = if (raw.isEmpty()) emptyList()
         else (contactHits + appHits + shortcutHits + settingHits + fileHits).sortedByDescending { it.points }
         val top = ranked.firstOrNull()?.takeIf { shows(SearchSection.TOP) }?.takeIf { ranker.clearlyAhead(it.id, it.points, ranked.getOrNull(1)?.points ?: 0.0) }
         // Shown once: on top, and not again in its section.
@@ -1002,8 +983,8 @@ class HomeActivity : Activity(), HomeScreen.Host {
         }
 
         val apps = appHits.rest()
-        val appsShown = if (pickingApp) apps.size else DrawerAdapter.COLS * (if (raw.isEmpty()) 2 else 1)
-        section("apps", if (raw.isEmpty() && !pickingApp) "Frequent apps" else "Apps", apps.size, appsShown) {
+        val appsShown = DrawerAdapter.COLS * (if (raw.isEmpty()) 2 else 1)
+        section("apps", if (raw.isEmpty()) "Frequent apps" else "Apps", apps.size, appsShown) {
             addApps(rows, limit("apps", apps, appsShown))
         }
 
@@ -1616,15 +1597,8 @@ class HomeActivity : Activity(), HomeScreen.Host {
     }
 
     private fun choose(entry: AppEntry, from: View?) {
-        val onPick = pick
-        if (onPick != null) {
-            pick = null
-            onPick(entry)
-            hideDrawer()
-        } else {
-            if (searching) history.record(search.text.toString().trim(), "app:${entry.key}")
-            launch(entry, from)
-        }
+        if (searching) history.record(search.text.toString().trim(), "app:${entry.key}")
+        launch(entry, from)
     }
 
     // endregion
@@ -1769,19 +1743,16 @@ class HomeActivity : Activity(), HomeScreen.Host {
     /** A quick press of a number on the home screen: search, starting with that number. */
     fun pressDigit(digit: Int) = openSearch(digit.toString(), fromKeypad = true)
 
-    /** A held number: what it's set to do, or, when it isn't set, offer to choose an app for it. */
+    /** A held number: its shortcut, or, when it has none, the shortcut editor to set one. */
     fun holdDigit(digit: Int) {
-        val keys = KeyShortcuts.get(this)
-        val action = keys.digit(digit)?.action
+        val code = KeyEvent.KEYCODE_0 + digit
+        val action = KeyShortcuts.get(this).forKey(code, packageName, atHome = true).firstOrNull { it.press == Press.LONG }?.action
         val app = action?.takeIf { it.type == ActionType.APP }?.value?.let(repo::find)
         when {
             // Opened the usual way, so app limits and recent apps see it.
             app != null -> launch(app, null)
-            action != null && action.type != ActionType.APP -> KeyActionRunner.run(this, action, LauncherService.running)
-            else -> openSearch(fromKeypad = true, hint = "Choose an app for $digit") {
-                keys.setDigit(digit, KeyAction(ActionType.APP, it.key))
-                toast("Hold $digit to open ${it.label}")
-            }
+            action != null -> KeyActionRunner.run(this, action, LauncherService.running)
+            else -> startActivity(Intent(this, SettingsActivity::class.java).putExtra(SettingsActivity.EXTRA_HOLD_KEY, code))
         }
     }
 

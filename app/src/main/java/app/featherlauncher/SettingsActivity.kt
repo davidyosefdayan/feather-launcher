@@ -120,6 +120,12 @@ class SettingsActivity : Activity() {
         repo = Launcher.repo(this)
         // Opened straight to one page (from the clock's menu, say); Back then closes Settings.
         intent.getStringExtra(EXTRA_PAGE)?.let { name -> Page.entries.firstOrNull { it.name == name }?.let { current = it; openedDirectly = true } }
+        // Holding a number with no shortcut opens a new one for it; leaving goes back home.
+        intent.getIntExtra(EXTRA_HOLD_KEY, 0).takeIf { it != 0 }?.let { key ->
+            draft = ShortcutDraft(key, press = Press.LONG)
+            current = Page.SHORTCUT
+            openedDirectly = true
+        }
         root = FrameLayout(this)
         overlays = Overlays(root) { palette }
         setContentView(root)
@@ -247,16 +253,19 @@ class SettingsActivity : Activity() {
         })
     }
 
+    /** Leaves the shortcut editor, back to where it was opened from. */
+    internal fun closeEditor() {
+        draft = null
+        if (openedDirectly) finish() else open(Page.KEYS)
+    }
+
     private fun back() {
         if (openedDirectly && current != Page.SHORTCUT && current != Page.FILTER) return finish()
         when (current) {
             Page.MAIN -> finish()
             // Leaving the editor without saving drops the changes: asked first, if there are any.
             Page.SHORTCUT -> {
-                val leave = {
-                    draft = null
-                    open(Page.KEYS)
-                }
+                val leave = ::closeEditor
                 val d = draft
                 if (d?.changed == true) confirm("Discard changes?", if (d.original == null) "This shortcut won't be added." else "Your changes to this shortcut won't be saved.",
                     "Discard", "Keep editing", leave)
@@ -311,7 +320,7 @@ class SettingsActivity : Activity() {
         }
         val limitsOn = AppLimits.get(this).limits.filter { it.enabled }
         val hiddenCount = prefs.hidden.size
-        val keyCount = KeyShortcuts.get(this).list.count { it.isDigit }
+        val keyCount = KeyShortcuts.get(this).list.size
         content.addView(spacer())
         content.addView(Components.group(this, p, listOf(
             pageRow(p, R.drawable.ic_palette, Page.APPEARANCE,
@@ -328,7 +337,7 @@ class SettingsActivity : Activity() {
         content.addView(Components.group(this, p, listOf(
             pageRow(p, R.drawable.ic_keyboard, Page.KEYS,
                 "Swipe down for ${if (prefs.swipeDownSearch) "Smart Search" else "notifications"}" +
-                    if (keyCount > 0) " · $keyCount number keys" else ""),
+                    when (keyCount) { 0 -> ""; 1 -> " · 1 shortcut"; else -> " · $keyCount shortcuts" }),
             pageRow(p, R.drawable.ic_search, Page.SEARCH, SearchSection.entries.filter { prefs.searchShows(it) }.let { on ->
                 when (on.size) { SearchSection.entries.size -> "All results"; 0 -> "Off"; else -> on.joinToString(", ") { it.title } }
             }),
@@ -829,6 +838,8 @@ class SettingsActivity : Activity() {
         private const val REQUEST_BACKUP = 32
         private const val REQUEST_RESTORE = 33
         const val EXTRA_PAGE = "page"
+        /** A key code: opened straight to a new shortcut for holding that key. */
+        const val EXTRA_HOLD_KEY = "hold_key"
         /** Opened from the update notification: shows the update. */
         const val EXTRA_UPDATE = "update"
     }

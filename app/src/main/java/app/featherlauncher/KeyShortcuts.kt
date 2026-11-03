@@ -12,21 +12,30 @@ enum class Press(val label: String, val verb: String) {
     DOUBLE("Double press", "Double press"),
 }
 
-/** Something a shortcut can do. [needs] says what has to be picked to finish setting it up. */
-enum class ActionType(val label: String, val icon: Int, val needs: Needs = Needs.NOTHING, val listed: Boolean = true) {
-    APP("Open an app", R.drawable.ic_app_list, Needs.APP),
+/**
+ * Something a shortcut can do. [needs] says what has to be picked to finish setting it up. On
+ * the lock screen, one that [needsUnlock] asks for the phone to be unlocked first.
+ */
+enum class ActionType(
+    val label: String,
+    val icon: Int,
+    val needs: Needs = Needs.NOTHING,
+    val listed: Boolean = true,
+    val needsUnlock: Boolean = false,
+) {
+    APP("Open an app", R.drawable.ic_app_list, Needs.APP, needsUnlock = true),
     /** One of an app's own actions (Messages' "New conversation"), chosen after the app under Open an app. */
-    APP_ACTION("Open an app action", R.drawable.ic_app_list, Needs.APP, listed = false),
-    CALL("Call someone", R.drawable.ic_phone_call, Needs.CONTACT),
+    APP_ACTION("Open an app action", R.drawable.ic_app_list, Needs.APP, listed = false, needsUnlock = true),
+    CALL("Call someone", R.drawable.ic_phone_call, Needs.CONTACT, needsUnlock = true),
     FLASHLIGHT("Flashlight on or off", R.drawable.ic_flashlight),
-    APP_LIST("App list", R.drawable.ic_app_list),
-    NEXT_PAGE("Next home page", R.drawable.ic_chevron_right),
-    PREVIOUS_PAGE("Previous home page", R.drawable.ic_chevron_left),
-    SEARCH("Smart Search", R.drawable.ic_search),
-    SWITCH_KEYBOARD("Switch keyboard", R.drawable.ic_keyboard),
+    APP_LIST("App list", R.drawable.ic_app_list, needsUnlock = true),
+    NEXT_PAGE("Next home page", R.drawable.ic_chevron_right, needsUnlock = true),
+    PREVIOUS_PAGE("Previous home page", R.drawable.ic_chevron_left, needsUnlock = true),
+    SEARCH("Smart Search", R.drawable.ic_search, needsUnlock = true),
+    SWITCH_KEYBOARD("Switch keyboard", R.drawable.ic_keyboard, needsUnlock = true),
     NOTIFICATIONS("Notifications", R.drawable.ic_notification),
     QUICK_SETTINGS("Quick settings", R.drawable.ic_settings),
-    RECENTS("Recent apps", R.drawable.ic_history),
+    RECENTS("Recent apps", R.drawable.ic_history, needsUnlock = true),
     RING_MODE("Ring or vibrate", R.drawable.ic_vibration),
     PLAY_PAUSE("Play or pause", R.drawable.ic_play),
     NEXT_TRACK("Next track", R.drawable.ic_next),
@@ -69,8 +78,8 @@ data class KeyShortcut(
 ) {
     val isCombo get() = keyCode2 != null
 
-    /** Holding a number, which has its own list in settings. */
-    val isDigit get() = keyCode in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 && keyCode2 == null && press == Press.LONG
+    /** Holding a number in all apps, which the Number keys list on the settings page shows. */
+    val isDigit get() = KeyShortcuts.isNumber(keyCode) && keyCode2 == null && press == Press.LONG && scope == Scope.ALL
 
     /** Whether it works with [pkg] in front ([atHome]: the home screen itself). */
     fun appliesTo(pkg: String?, atHome: Boolean) = when (scope) {
@@ -116,20 +125,8 @@ class KeyShortcuts private constructor(context: Context) {
 
     fun remove(shortcut: KeyShortcut) = save(list - shortcut)
 
-    /**
-     * Holding a number is a shortcut like any other (hold, in all apps), set from its own list on
-     * the settings page rather than the shortcut editor.
-     */
+    /** What holding [digit] does in all apps, if anything. */
     fun digit(digit: Int): KeyShortcut? = list.firstOrNull { it.isDigit && it.keyCode == KeyEvent.KEYCODE_0 + digit }
-
-    /** Sets what holding [digit] does; null clears it. An app opens from one number only. */
-    fun setDigit(digit: Int, action: KeyAction?) {
-        val code = KeyEvent.KEYCODE_0 + digit
-        val kept = list.filter { sc ->
-            !(sc.isDigit && (sc.keyCode == code || action?.type == ActionType.APP && sc.action == action))
-        }
-        save(if (action == null) kept else kept + KeyShortcut(code, Press.LONG, action))
-    }
 
     /** The number held to open the app with [appKey], if there is one. */
     fun digitFor(appKey: String): Int? = list.firstOrNull { it.isDigit && it.action.type == ActionType.APP && it.action.value == appKey }
@@ -166,9 +163,10 @@ class KeyShortcuts private constructor(context: Context) {
             instance ?: synchronized(this) { instance ?: KeyShortcuts(context.applicationContext).also { instance = it } }
 
 
-        /** Keys a shortcut can't use: numbers have their own section, and Power must keep working. */
-        fun canUse(keyCode: Int) = keyCode !in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 &&
-            keyCode != KeyEvent.KEYCODE_POWER && keyCode != KeyEvent.KEYCODE_ENDCALL && keyCode != KeyEvent.KEYCODE_UNKNOWN
+        fun isNumber(keyCode: Int) = keyCode in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9
+
+        /** Keys a shortcut can't use: Power must keep working. */
+        fun canUse(keyCode: Int) = keyCode != KeyEvent.KEYCODE_POWER && keyCode != KeyEvent.KEYCODE_ENDCALL && keyCode != KeyEvent.KEYCODE_UNKNOWN
 
         /**
          * Keys whose normal press can be done for them when it isn't a shortcut, so holding or
@@ -181,7 +179,14 @@ class KeyShortcuts private constructor(context: Context) {
         )
 
         /** Keys that type a character, which can still be typed into a text box after being held back. */
-        fun typesInTextBoxes(keyCode: Int) = keyCode == KeyEvent.KEYCODE_STAR || keyCode == KeyEvent.KEYCODE_POUND
+        fun typesInTextBoxes(keyCode: Int) = isNumber(keyCode) || keyCode == KeyEvent.KEYCODE_STAR || keyCode == KeyEvent.KEYCODE_POUND
+
+        /** The character a key in [typesInTextBoxes] types. */
+        fun typed(keyCode: Int) = when (keyCode) {
+            KeyEvent.KEYCODE_STAR -> "*"
+            KeyEvent.KEYCODE_POUND -> "#"
+            else -> (keyCode - KeyEvent.KEYCODE_0).toString()
+        }
 
         /** "Star (*)", "Volume up", "Call": what the key is called on the settings page. */
         fun keyName(keyCode: Int): String = when (keyCode) {
