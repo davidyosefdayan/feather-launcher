@@ -64,6 +64,11 @@ class HomeScreen(
     val workspace = Workspace(activity)
     private val shortcuts = Shortcuts(activity)
     private val views = HashMap<Long, View>()
+    /**
+     * Each folder's picture and what it was drawn from; drawn again only when that changes, not at
+     * every return home. Up here, before init draws the first ones.
+     */
+    private val folderIcons = HashMap<Long, Pair<List<Any?>, Bitmap>>()
     private val drag = Drag()
     private var resize: ResizeFrame? = null
 
@@ -758,9 +763,6 @@ class HomeScreen(
     // region Folders
 
     /** The folder's icon: a tile in the icon shape with up to four of its apps inside. */
-    /** Each folder's picture and what it was drawn from; drawn again only when that changes, not at every return home. */
-    private val folderIcons = HashMap<Long, Pair<List<Any?>, Bitmap>>()
-
     private fun folderIcon(item: HomeItem): Bitmap {
         val icons = item.apps.take(4).map { key -> repo.find(key)?.let(repo::icon) }
         val from = listOf(prefs.iconShape, palette().folderFill, dp(64)) + icons.map { it?.let(System::identityHashCode) }
