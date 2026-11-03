@@ -97,6 +97,12 @@ class HomeScreen(
     /** What's drawn around the page and the pages beside it: gone while the pages slide, back once they've stopped. */
     private val pageRings = mutableListOf<View>()
 
+    /**
+     * Each folder's picture and what it was drawn from; drawn again only when that changes, not at
+     * every return home. Before init, which draws the folders.
+     */
+    private val folderIcons = HashMap<Long, Pair<List<Any?>, Bitmap>>()
+
     init {
         dock.cols = Workspace.DOCK_COLS
         dock.rows = 1
@@ -752,9 +758,6 @@ class HomeScreen(
     // region Folders
 
     /** The folder's icon: a tile in the icon shape with up to four of its apps inside. */
-    /** Each folder's picture and what it was drawn from; drawn again only when that changes, not at every return home. */
-    private val folderIcons = HashMap<Long, Pair<List<Any?>, Bitmap>>()
-
     private fun folderIcon(item: HomeItem): Bitmap {
         val icons = item.apps.take(4).map { key -> repo.find(key)?.let(repo::icon) }
         val from = listOf(prefs.iconShape, palette().folderFill, dp(64)) + icons.map { it?.let(System::identityHashCode) }
