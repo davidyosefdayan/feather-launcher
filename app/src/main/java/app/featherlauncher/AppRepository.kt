@@ -235,7 +235,7 @@ class AppRepository(private val context: Context, shape: IconShape) {
 
     private companion object {
         /** Bump when dark or tinted icons are drawn differently. */
-        const val LOOK_VERSION = 30
+        const val LOOK_VERSION = 32
         /** Raised when the way icons are cut to their shape changes. */
         const val SHAPE_VERSION = 2
         const val DATED_ICONS = "com.google.android.calendar.dynamic_icons"
