@@ -2372,19 +2372,27 @@ class HomeScreen(
      * Puts the keypad highlight on the leftmost item in the dock (the page's top left item when
      * the dock is empty), so it's there as soon as the home screen opens, always in the same
      * place. Returns false when there's nothing, or the screen is in touch mode (where nothing
-     * shows a highlight until a key is pressed).
+     * shows a highlight until a key is pressed). [fromTouch] is for a key that's just been
+     * pressed: it can arrive while the screen is still in touch mode, which a plain request
+     * would leave there.
      */
-    fun focusDockStart(): Boolean {
+    fun focusDockStart(fromTouch: Boolean = false): Boolean {
         val order = workspace.items.filter { it.inDock }.sortedBy { it.x } +
             workspace.items.filter { it.page == pages.currentPage }.sortedWith(compareBy({ it.y }, { it.x }))
         val first = order.firstNotNullOfOrNull { item -> views[item.id]?.takeIf { it.isFocusable && it.visibility == View.VISIBLE } }
-        return first?.requestFocus() == true
+            ?: return false
+        return if (fromTouch) first.requestFocusFromTouch() else first.requestFocus()
     }
 
-    /** Flips to the next or previous page, if there is one (holding right or left on the keypad). */
+    /**
+     * Flips to the next or previous page, if there is one (holding right or left on the keypad).
+     * The highlight goes back to the dock's first item, as when coming home.
+     */
     fun flipPage(delta: Int) {
         val next = pages.currentPage + delta
-        if (next in 0 until workspace.pageCount) pages.snapTo(next)
+        if (next !in 0 until workspace.pageCount) return
+        pages.snapTo(next)
+        focusDockStart(fromTouch = true)
     }
 
     private fun itemsOn(page: Int): List<View> = workspace.items.filter { it.page == page }
